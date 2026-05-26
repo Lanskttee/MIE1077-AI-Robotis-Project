@@ -25,41 +25,57 @@ navigation -> mock IoT.
 
 ![HomeMate](docs/images/pygame_demo.gif)
 
-Scenario: the robot starts in the living room, walks to the bedroom to
-find a tired owner, then crosses to the kitchen and brews coffee. The
-animation is generated headlessly (so it stays in sync with the code):
+The view is a 24 × 16 tile apartment split into four rooms (living
+room, kitchen, bedroom, bathroom) separated by walls and doors. The
+blue circle is the robot, the green square is the owner. IoT devices
+sit in fixed slots inside each room: curtains (`C-X` closed / `C-O`
+open), lamps (`L-` off / `L+` on), a kitchen toaster with a `T%`
+progress label, and a coffee maker with a cup counter (`K0`, `K1`…).
+The right-hand panel logs the dialogue, and the top bar shows the
+robot's current room, the owner's detected emotion, and a status
+string.
+
+The recorded scenario runs the full four-module pipeline once:
+
+1. **Establishing shot.** Robot in the living room, owner in the
+   bedroom. Top bar reads `robot: living_room`, emotion `neutral`.
+2. **User request.** `you: I'm tired. Brew some coffee.` appears in
+   the dialogue panel; the status bar shifts to `Sending to LLM…`.
+3. **Find the owner.** The planning module runs A\* over the grid
+   from the robot's current tile to a walkable tile in the bedroom.
+   The robot then animates one tile per frame across the living room,
+   through the corridor door, and into the bedroom.
+4. **Read emotion.** With the robot and the owner in the same room,
+   the perception module is polled. The GIF uses the mock detector
+   (`tired`, 0.95 confidence); the live Pygame demo substitutes the
+   real DeepFace + webcam path. The top bar updates accordingly.
+5. **Empathetic reply.** The cognition module emits a `speak` tool
+   call shaped by the detected emotion: `robot: You look tired. Let
+   me start the coffee.`
+6. **Cross to the kitchen.** A second A\* search routes the robot from
+   the bedroom to the coffee maker tile in the kitchen; the path is
+   again animated tile-by-tile.
+7. **Actuate the IoT.** `set_device(coffee.kitchen, brew)` flips the
+   device into its brewing state. The coffee maker's colour deepens
+   and its progress ticks forward each frame; the cup counter
+   increments when a brew cycle finishes.
+8. **Close out.** Two short follow-up lines (`Brewing. Rest up.` →
+   `Coffee is ready.`) close the dialogue.
+
+Together, those eight steps exercise every module in the architecture
+table above: perception (emotion read), cognition (tool selection and
+language), planning (two A\* searches), and action (navigation +
+IoT actuation), with the world and UI updating each frame. The GIF
+runs the deterministic `MockLLM` so the scene is byte-reproducible;
+swapping in real Claude requires only an `ANTHROPIC_API_KEY` and
+changes no other code path.
+
+Regenerate the demo assets from the current code:
 
 ```powershell
 python -m homemate.scripts.gif_demo    # animated GIF
 python -m homemate.scripts.snapshot    # single-frame PNG
 ```
-
-Confirm the Claude API key is wired up (one short call):
-
-```powershell
-python -m homemate.scripts.live_check
-```
-
-After a few turns, `data/memory/profile.json` looks like:
-
-```json
-{
-  "total_episodes": 3,
-  "emotion_counts": { "sad": 1, "tired": 1, "happy": 1 },
-  "device_action_counts": {
-    "curtain.bedroom:open": 1,
-    "coffee.kitchen:brew": 1
-  },
-  "recent_requests": [
-    "open the bedroom curtains",
-    "brew some coffee",
-    "thanks for everything"
-  ]
-}
-```
-
-That rollup is summarised into the system prompt on every turn, so Claude
-can personalise replies across sessions.
 
 ## Setup
 
