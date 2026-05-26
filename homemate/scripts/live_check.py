@@ -19,7 +19,8 @@ import sys
 
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    # override=True so an empty inherited ANTHROPIC_API_KEY doesn't shadow .env
+    load_dotenv(override=True)
 except ImportError:
     pass  # dotenv is optional; env vars set directly still work
 

@@ -22,7 +22,8 @@ from typing import Optional
 
 try:
     from dotenv import load_dotenv
-    load_dotenv()  # populate env BEFORE importing config
+    # override=True so an empty inherited ANTHROPIC_API_KEY doesn't shadow .env
+    load_dotenv(override=True)  # populate env BEFORE importing config
 except ImportError:
     pass  # dotenv is optional; env vars set directly still work
 
