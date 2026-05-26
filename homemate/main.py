@@ -279,15 +279,26 @@ class App:
         pygame.draw.rect(self.screen, config.PALETTE.owner,
                          (ox * T + 5, oy * T + offset_y + 5, T - 10, T - 10), border_radius=4)
 
+    DEVICE_SLOTS = {
+        "curtain":      (1, 1),     # top-left
+        "lamp":         (-1, 1),    # top-right
+        "thermostat":   (1, 2),     # left, second row
+        "tv":           (-2, 2),    # right-center
+        "toaster":      (-1, -1),   # bottom-right
+        "coffee_maker": (1, -1),    # bottom-left
+        "speaker":      (-1, -2),   # bottom-right, one up
+        "fan":          (1, -2),    # bottom-left, one up
+        "door_lock":    (-1, 1),    # default fallback
+    }
+
     def _draw_device(self, dev, offset_y: int) -> None:
         T = config.TILE_PX
         room = self.apt.room(dev.room)
-        # pick a slot per device kind so they don't overlap
-        slot = {"curtain": (room.x0 + 1, room.y0 + 1),
-                "lamp":    (room.x1 - 1, room.y0 + 1),
-                "toaster": (room.x1 - 1, room.y1 - 1),
-                "coffee_maker": (room.x0 + 1, room.y1 - 1)}.get(dev.kind, (room.x0 + 1, room.y0 + 1))
-        x, y = slot
+        dx, dy = self.DEVICE_SLOTS.get(dev.kind, (1, 1))
+        x = room.x1 + dx if dx < 0 else room.x0 + dx
+        y = room.y1 + dy if dy < 0 else room.y0 + dy
+        x = max(room.x0, min(room.x1, x))
+        y = max(room.y0, min(room.y1, y))
         cx, cy = x * T + T // 2, y * T + offset_y + T // 2
         if dev.kind == "curtain":
             color = (200, 200, 220) if dev.state.get("open") else (90, 90, 140)
@@ -311,6 +322,36 @@ class App:
             pygame.draw.rect(self.screen, color,
                              (x * T + 4, y * T + offset_y + 4, T - 8, T - 8), border_radius=2)
             tag = f"K{dev.state.get('cups',0)}"
+        elif dev.kind == "thermostat":
+            mode = dev.state.get("mode", "off")
+            color = (200, 100, 80) if mode == "heat" else (
+                (90, 160, 220) if mode == "cool" else (
+                    (160, 160, 170) if mode == "off" else (130, 200, 150)))
+            pygame.draw.circle(self.screen, color, (cx, cy), T // 2 - 8)
+            tag = f"{dev.state.get('target_c', 0):.0f}C"
+        elif dev.kind == "tv":
+            on = dev.state.get("on")
+            color = (140, 200, 240) if on else (60, 60, 70)
+            pygame.draw.rect(self.screen, color,
+                             (x * T + 4, y * T + offset_y + 8, T - 8, T - 16), border_radius=2)
+            tag = dev.state.get("channel", "")[:3].upper() if on else "TV-"
+        elif dev.kind == "speaker":
+            playing = dev.state.get("playing")
+            color = (180, 140, 220) if playing else (80, 70, 90)
+            pygame.draw.rect(self.screen, color,
+                             (x * T + 8, y * T + offset_y + 4, T - 16, T - 8), border_radius=4)
+            tag = dev.state.get("playlist", "")[:3].upper() if playing else "SP-"
+        elif dev.kind == "fan":
+            on = dev.state.get("on")
+            color = (130, 200, 220) if on else (90, 100, 110)
+            pygame.draw.circle(self.screen, color, (cx, cy), T // 2 - 6, width=3)
+            tag = f"F{dev.state.get('speed',0)}" if on else "F-"
+        elif dev.kind == "door_lock":
+            locked = dev.state.get("locked")
+            color = (220, 180, 80) if not locked else (140, 110, 60)
+            pygame.draw.rect(self.screen, color,
+                             (x * T + 6, y * T + offset_y + 6, T - 12, T - 12), border_radius=6)
+            tag = "LOCK" if locked else "OPEN"
         else:
             tag = dev.kind[:2]
         lbl = self.font_sm.render(tag, True, config.PALETTE.text)

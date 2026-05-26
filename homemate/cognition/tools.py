@@ -79,12 +79,36 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "make_plan",
+        "description": "Generate a high-level plan (ordered sub-goals like "
+                       "find_owner, sense_emotion, speak, actuate) for the "
+                       "user's current request. Useful as a first step on "
+                       "multi-step requests — read the plan, then carry it out "
+                       "using the other tools. Calling this does NOT execute "
+                       "any actions.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "user_message": {
+                    "type": "string",
+                    "description": "The user request, restated in your own words if useful.",
+                },
+            },
+            "required": ["user_message"],
+        },
+    },
+    {
         "name": "set_device",
         "description": "Actuate an IoT device. Supported (device_id, action) pairs: "
                        "curtain.* -> open|close|toggle; "
                        "lamp.* -> on|off|toggle|set_brightness(brightness:0..1); "
                        "toaster.kitchen -> start(level?:1..5)|stop|set_level(level:1..5); "
-                       "coffee.kitchen -> brew|stop.",
+                       "coffee.kitchen -> brew|stop; "
+                       "thermostat.* -> set_target(target_c:10..32)|set_mode(mode:heat|cool|auto|off)|off; "
+                       "tv.* -> on|off|toggle|set_channel(channel:news|movies|music|sports|kids)|set_volume(volume:0..1); "
+                       "speaker.* -> play(playlist?:calm|rain|jazz|pop|focus)|stop|set_playlist(playlist:...)|set_volume(volume:0..1); "
+                       "fan.* -> on|off|toggle|set_speed(speed:1..3); "
+                       "lock.* -> lock|unlock|toggle.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -119,6 +143,11 @@ def dispatch_tool(skills: Skills, name: str, tool_input: dict[str, Any]) -> dict
             return skills.speak(tool_input.get("text", ""))
         if name == "list_devices":
             return skills.list_devices()
+        if name == "make_plan":
+            # Lazy import: avoids cognition <-> planning cycle at module load.
+            from ..planning.react import ReActPlanner
+            plan = ReActPlanner().plan(tool_input.get("user_message", ""), skills=skills)
+            return {"ok": True, "plan": plan.to_json()}
         if name == "set_device":
             kwargs = tool_input.get("kwargs") or {}
             return skills.set_device(tool_input["device_id"], tool_input["action"], **kwargs)

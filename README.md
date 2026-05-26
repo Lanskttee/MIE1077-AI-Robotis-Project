@@ -16,9 +16,11 @@ navigation -> mock IoT.
 |------------|-----------------------------------------------------------------|
 | Perception | OpenCV webcam capture, DeepFace facial-emotion classifier       |
 | Cognition  | Anthropic Claude tool-use loop; deterministic `MockLLM` fallback |
-| Planning   | A* on the apartment grid; time-of-day priors for owner search   |
-| Action     | 8 primitive skills exposed as JSON tool schemas                 |
+| Planning   | A* on the apartment grid; time-of-day owner search; ReAct goal decomposer (`planning/react.py`) |
+| Action     | Primitive skills exposed as JSON tool schemas (plus `make_plan`) |
 | Memory     | Append-only JSONL of episodes + profile rollup in the prompt    |
+| IoT        | 11 devices across 4 rooms: curtains, lamps, toaster, coffee maker, thermostat, TV, speaker, fan, front-door lock |
+| Evaluation | 20-scenario benchmark (`homemate/eval/`) with ablation runners  |
 | UI         | Pygame top-down view, dialogue panel, status bar, input field   |
 
 ## Demo
@@ -113,7 +115,9 @@ Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
 ```powershell
 python -m homemate.main                    # Pygame UI
 python -m homemate.demo_cli sad "find me"  # headless one-turn run
-python -m pytest tests/ -q                 # smoke + memory tests
+python -m homemate.eval                    # 20-scenario benchmark (baseline)
+python -m homemate.eval --no-emotion       # ablation: skip emotion injection
+python -m pytest tests/ -q                 # 55 tests: smoke, memory, planner, IoT, eval
 ```
 
 Pygame key bindings:
@@ -146,14 +150,18 @@ homemate/
   config.py           Grid, palette, runtime flags
   world/              Apartment, robot/owner entities, mock IoT network
   perception/         Webcam + DeepFace; mock fallback
-  planning/           A*; time-of-day room search policy
+  planning/           A*; time-of-day room search; ReAct planner
   cognition/          Claude tool-calling loop; JSON tool schemas
   action/             Primitive skills exposed to the LLM
   memory/             JSONL episode log + profile rollup
+  eval/               20-scenario benchmark + ablation runner
   scripts/            live_check.py, snapshot.py, gif_demo.py
 tests/
   test_smoke.py       End-to-end MockLLM run
   test_memory.py      Memory module unit tests
+  test_planner.py     ReAct planner + executor tests
+  test_new_iot.py     Thermostat / TV / speaker / fan / lock tests
+  test_eval.py        Eval-suite harness and criteria tests
 ```
 
 ## Roadmap
@@ -162,5 +170,5 @@ tests/
 |-----------------|----------------------------------------------------|-----------------------------------------------------------|
 | May 7 - May 28  | 2D simulator, mock IoT, webcam emotion             | done                                                      |
 | May 29 - Jun 18 | Claude tool loop, A* navigation, find-and-greet    | done; `live_check` confirms the API path                  |
-| Jun 19 - Jul 9  | Memory, ReAct planner, 20-scenario eval suite      | memory done; planner and eval suite in progress           |
-| Jul 10 - Jul 30 | Full evaluation, ablations, demo video, slide deck | pending                                                   |
+| Jun 19 - Jul 9  | Memory, ReAct planner, 20-scenario eval suite      | done; baseline 20/20, no-emotion ablation 8/20            |
+| Jul 10 - Jul 30 | Full evaluation, ablations, demo video, slide deck | eval and ablation harnesses ready; video + slides pending |

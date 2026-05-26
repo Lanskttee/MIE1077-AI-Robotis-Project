@@ -20,7 +20,7 @@ from typing import Any
 class IoTDevice:
     device_id: str
     room: str
-    kind: str           # 'curtain', 'lamp', 'toaster', 'coffee_maker'
+    kind: str           # see subclasses below
     state: dict[str, Any] = field(default_factory=dict)
 
     # subclasses override
@@ -157,6 +157,174 @@ class CoffeeMaker(IoTDevice):
             self.state["cups"] += 1
 
 
+@dataclass
+class Thermostat(IoTDevice):
+    """A simple set-point thermostat. ``mode`` is heat|cool|auto|off."""
+    kind: str = "thermostat"
+
+    def __post_init__(self) -> None:
+        self.state.setdefault("target_c", 21.0)
+        self.state.setdefault("current_c", 21.0)
+        self.state.setdefault("mode", "auto")     # heat|cool|auto|off
+
+    def actions(self) -> list[str]:
+        return ["set_target", "set_mode", "off"]
+
+    def apply(self, action: str, **kwargs: Any) -> dict[str, Any]:
+        if action == "set_target":
+            t = float(kwargs.get("target_c", self.state["target_c"]))
+            self.state["target_c"] = max(10.0, min(32.0, t))
+            if self.state["mode"] == "off":
+                self.state["mode"] = "auto"
+        elif action == "set_mode":
+            mode = str(kwargs.get("mode", "auto")).lower()
+            if mode not in ("heat", "cool", "auto", "off"):
+                return {"ok": False, "error": f"unknown mode {mode!r}"}
+            self.state["mode"] = mode
+        elif action == "off":
+            self.state["mode"] = "off"
+        else:
+            return {"ok": False, "error": f"unknown action {action}"}
+        return {"ok": True, "state": dict(self.state)}
+
+    def tick(self, dt: float) -> None:
+        if self.state["mode"] == "off":
+            return
+        # drift current_c toward target_c at 0.2 C/sec (visual only)
+        cur = float(self.state["current_c"])
+        tgt = float(self.state["target_c"])
+        if abs(cur - tgt) < 0.05:
+            return
+        step = 0.2 * dt * (1 if tgt > cur else -1)
+        self.state["current_c"] = round(cur + step, 2)
+
+
+@dataclass
+class TV(IoTDevice):
+    kind: str = "tv"
+
+    CHANNELS = ("news", "movies", "music", "sports", "kids")
+
+    def __post_init__(self) -> None:
+        self.state.setdefault("on", False)
+        self.state.setdefault("channel", "news")
+        self.state.setdefault("volume", 0.3)
+
+    def actions(self) -> list[str]:
+        return ["on", "off", "toggle", "set_channel", "set_volume"]
+
+    def apply(self, action: str, **kwargs: Any) -> dict[str, Any]:
+        if action == "on":
+            self.state["on"] = True
+        elif action == "off":
+            self.state["on"] = False
+        elif action == "toggle":
+            self.state["on"] = not self.state["on"]
+        elif action == "set_channel":
+            ch = str(kwargs.get("channel", "")).lower()
+            if ch not in self.CHANNELS:
+                return {"ok": False, "error": f"unknown channel {ch!r}",
+                        "available": list(self.CHANNELS)}
+            self.state["channel"] = ch
+            self.state["on"] = True
+        elif action == "set_volume":
+            v = float(kwargs.get("volume", 0.3))
+            self.state["volume"] = max(0.0, min(1.0, v))
+        else:
+            return {"ok": False, "error": f"unknown action {action}"}
+        return {"ok": True, "state": dict(self.state)}
+
+
+@dataclass
+class Speaker(IoTDevice):
+    """A bedside / nightstand speaker for music or ambient sounds."""
+    kind: str = "speaker"
+
+    PLAYLISTS = ("calm", "rain", "jazz", "pop", "focus")
+
+    def __post_init__(self) -> None:
+        self.state.setdefault("playing", False)
+        self.state.setdefault("playlist", "calm")
+        self.state.setdefault("volume", 0.4)
+
+    def actions(self) -> list[str]:
+        return ["play", "stop", "set_playlist", "set_volume"]
+
+    def apply(self, action: str, **kwargs: Any) -> dict[str, Any]:
+        if action == "play":
+            if "playlist" in kwargs:
+                pl = str(kwargs["playlist"]).lower()
+                if pl not in self.PLAYLISTS:
+                    return {"ok": False, "error": f"unknown playlist {pl!r}",
+                            "available": list(self.PLAYLISTS)}
+                self.state["playlist"] = pl
+            self.state["playing"] = True
+        elif action == "stop":
+            self.state["playing"] = False
+        elif action == "set_playlist":
+            pl = str(kwargs.get("playlist", "")).lower()
+            if pl not in self.PLAYLISTS:
+                return {"ok": False, "error": f"unknown playlist {pl!r}",
+                        "available": list(self.PLAYLISTS)}
+            self.state["playlist"] = pl
+        elif action == "set_volume":
+            v = float(kwargs.get("volume", 0.4))
+            self.state["volume"] = max(0.0, min(1.0, v))
+        else:
+            return {"ok": False, "error": f"unknown action {action}"}
+        return {"ok": True, "state": dict(self.state)}
+
+
+@dataclass
+class Fan(IoTDevice):
+    kind: str = "fan"
+
+    def __post_init__(self) -> None:
+        self.state.setdefault("on", False)
+        self.state.setdefault("speed", 2)        # 1..3
+
+    def actions(self) -> list[str]:
+        return ["on", "off", "toggle", "set_speed"]
+
+    def apply(self, action: str, **kwargs: Any) -> dict[str, Any]:
+        if action == "on":
+            self.state["on"] = True
+        elif action == "off":
+            self.state["on"] = False
+        elif action == "toggle":
+            self.state["on"] = not self.state["on"]
+        elif action == "set_speed":
+            s = int(kwargs.get("speed", 2))
+            self.state["speed"] = max(1, min(3, s))
+            self.state["on"] = True
+        else:
+            return {"ok": False, "error": f"unknown action {action}"}
+        return {"ok": True, "state": dict(self.state)}
+
+
+@dataclass
+class DoorLock(IoTDevice):
+    """Front-door smart lock — modelled as a room-scoped device for visibility."""
+    kind: str = "door_lock"
+
+    def __post_init__(self) -> None:
+        self.state.setdefault("locked", True)
+
+    def actions(self) -> list[str]:
+        return ["lock", "unlock", "toggle"]
+
+    def apply(self, action: str, **kwargs: Any) -> dict[str, Any]:
+        if action == "lock":
+            self.state["locked"] = True
+        elif action == "unlock":
+            self.state["locked"] = False
+        elif action == "toggle":
+            self.state["locked"] = not self.state["locked"]
+        else:
+            return {"ok": False, "error": f"unknown action {action}"}
+        return {"ok": True, "state": dict(self.state)}
+
+
 # ---------------------------------------------------------------------------
 # Network / registry
 # ---------------------------------------------------------------------------
@@ -175,14 +343,23 @@ class IoTNetwork:
 
     @classmethod
     def default(cls) -> "IoTNetwork":
-        """Default device set used by the MVP."""
+        """Default device set covering all four rooms.
+
+        Counts: 2 curtains, 2 lamps, 1 toaster, 1 coffee maker, 1 thermostat,
+        1 TV, 1 speaker, 1 fan, 1 front-door lock = 11 devices across all rooms.
+        """
         net = cls()
-        net.register(Curtain("curtain.living_room",  "living_room"))
-        net.register(Curtain("curtain.bedroom",      "bedroom"))
-        net.register(Lamp(   "lamp.living_room",     "living_room"))
-        net.register(Lamp(   "lamp.bedroom",         "bedroom"))
-        net.register(Toaster("toaster.kitchen",      "kitchen"))
-        net.register(CoffeeMaker("coffee.kitchen",   "kitchen"))
+        net.register(Curtain(    "curtain.living_room",  "living_room"))
+        net.register(Curtain(    "curtain.bedroom",      "bedroom"))
+        net.register(Lamp(       "lamp.living_room",     "living_room"))
+        net.register(Lamp(       "lamp.bedroom",         "bedroom"))
+        net.register(Toaster(    "toaster.kitchen",      "kitchen"))
+        net.register(CoffeeMaker("coffee.kitchen",       "kitchen"))
+        net.register(Thermostat( "thermostat.living_room", "living_room"))
+        net.register(TV(         "tv.living_room",       "living_room"))
+        net.register(Speaker(    "speaker.bedroom",      "bedroom"))
+        net.register(Fan(        "fan.bedroom",          "bedroom"))
+        net.register(DoorLock(   "lock.front_door",      "living_room"))
         return net
 
     # ---- queries ----

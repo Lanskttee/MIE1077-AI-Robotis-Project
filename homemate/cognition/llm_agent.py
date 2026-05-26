@@ -32,9 +32,14 @@ SYSTEM_PROMPT = """You are HomeMate, a friendly home companion robot living in
 a four-room apartment (living_room, kitchen, bedroom, bathroom). You can move
 between rooms, read your owner's facial emotion when you are in the same room,
 hold short empathetic conversations, and control smart-home devices
-(curtains, lamps, toaster, coffee maker).
+(curtains, lamps, toaster, coffee maker, thermostat, TV, speaker, fan,
+front-door lock).
 
 Guidelines:
+- For multi-step requests, you may first call `make_plan` to get a structured
+  plan (find_owner -> sense_emotion -> speak -> goto_device + actuate per
+  device). Read the plan, then execute its steps using the other tools. The
+  plan is a suggestion — deviate when it makes sense.
 - Always check where you are with `look_around` if unsure.
 - If you don't know where the owner is, call `find_owner` (do NOT guess rooms one by one).
 - Before speaking to the owner, make sure you are in the same room.
@@ -202,40 +207,57 @@ class LLMAgent:
 class MockLLM:
     """A deterministic stand-in for the Claude agent.
 
-    Strategy for each turn:
-      1. find_owner
-      2. read_emotion
-      3. speak an empathetic line based on emotion
-      4. if the user message mentions an IoT verb (open/close/start/brew/on/off),
-         dispatch a best-effort tool call
-      5. stop
+    By default each turn runs the :class:`ReActPlanner` to decompose the user
+    message into a sequence of sub-goals (find owner → read emotion → speak
+    → goto+actuate per device) and then executes them via the same tool
+    dispatch path the real LLM uses.
+
+    Pass ``use_planner=False`` to fall back to a "no-planner" baseline used by
+    the evaluation suite's ablation runs. In that mode, the agent always does
+    find_owner → read_emotion → speak, then runs the legacy single-keyword IoT
+    dispatch with no multi-step decomposition.
     """
 
-    EMPATHY = {
-        "happy":     "You look great today! What's making you smile?",
-        "sad":       "I'm here with you. Want me to dim the lights and play something calm?",
-        "angry":     "Take a breath — I'm listening. Want to tell me what happened?",
-        "surprised": "Whoa, something exciting? Tell me about it!",
-        "neutral":   "Hey, just checking in. Anything I can do for you?",
-        "tired":     "You look a bit tired. Want me to start the coffee maker?",
-    }
-
-    KEYWORDS = {
-        "curtain":  ("open",  "close", "toggle"),
-        "lamp":     ("on",    "off",   "toggle"),
-        "light":    ("on",    "off",   "toggle"),
-        "toaster":  ("start", "stop"),
-        "coffee":   ("brew",  "stop"),
-    }
+    EMPATHY: dict[str, str]  # populated below from planner
 
     def __init__(self, skills: Skills,
-                 memory: MemoryStore | None = None) -> None:
+                 memory: MemoryStore | None = None,
+                 *, use_planner: bool = True) -> None:
         self.skills = skills
         self.memory = memory
         self.history: list[dict[str, Any]] = []
+        self.use_planner = use_planner
+        # Lazy import — keeps the cognition <-> planning boundary clean.
+        from ..planning.react import EMPATHY, KIND_KEYWORDS, PlanExecutor, ReActPlanner
+        self._planner = ReActPlanner()
+        self._executor = PlanExecutor(skills, empathy_lines=EMPATHY)
+        self.EMPATHY = EMPATHY
+        self.KEYWORDS = KIND_KEYWORDS
 
     def run_turn(self, user_message: str) -> TurnResult:
         room_start = self.skills.robot_room()
+        if self.use_planner:
+            result = self._run_with_planner(user_message)
+        else:
+            result = self._run_legacy(user_message)
+        self._record(user_message, room_start, result)
+        return result
+
+    # ---- planner-driven path ----
+
+    def _run_with_planner(self, user_message: str) -> TurnResult:
+        plan = self._planner.plan(user_message, skills=self.skills)
+        exec_res = self._executor.execute(plan)
+        result = TurnResult(
+            spoken=list(exec_res.spoken),
+            tool_trace=list(exec_res.tool_trace),
+            final_text=f"Done. Detected emotion: {exec_res.detected_emotion}.",
+        )
+        return result
+
+    # ---- legacy / "no-planner" ablation path ----
+
+    def _run_legacy(self, user_message: str) -> TurnResult:
         result = TurnResult()
 
         def call(name: str, **inp: Any) -> dict[str, Any]:
@@ -245,27 +267,23 @@ class MockLLM:
                 result.spoken.append(out["spoken"])
             return out
 
-        # 1. find owner if we don't know where they are
         if not self.skills.owner_found or self.skills.robot_room() != self.skills.owner_room():
             call("find_owner")
 
-        # 2. read emotion
         emotion = "neutral"
         er = call("read_emotion")
         if er.get("ok"):
             emotion = er["emotion"]
-
-        # 3. speak empathetic line
         call("speak", text=self.EMPATHY.get(emotion, self.EMPATHY["neutral"]))
 
-        # 4. naive IoT keyword dispatch
         msg = (user_message or "").lower()
-        for kw, _actions in self.KEYWORDS.items():
-            if kw in msg:
+        kinds_dispatched: set[str] = set()
+        for kw, kind in self.KEYWORDS.items():
+            if kw in msg and kind not in kinds_dispatched:
                 self._dispatch_iot_by_keyword(kw, msg, call)
+                kinds_dispatched.add(kind)
 
         result.final_text = f"Done. Detected emotion: {emotion}."
-        self._record(user_message, room_start, result)
         return result
 
     def _record(self, user_message: str, room_start: str | None,
@@ -284,37 +302,32 @@ class MockLLM:
         self.memory.record_episode(ep)
 
     def _dispatch_iot_by_keyword(self, kw: str, msg: str, call: Callable) -> None:
-        # Figure out an action
-        if "open" in msg:    action = "open"
-        elif "close" in msg: action = "close"
-        elif "start" in msg or "brew" in msg or "make" in msg: action = "start" if kw == "toaster" else "brew"
-        elif "on" in msg:    action = "on"
-        elif "off" in msg:   action = "off"
-        else:                action = "toggle"
-        # Find a matching device (prefer one whose room appears in the message)
-        room_hits = [r for r in ("living_room", "kitchen", "bedroom", "bathroom") if r.split("_")[0] in msg]
+        from ..planning.react import action_for
+        kind = self.KEYWORDS.get(kw)
+        if kind is None:
+            return
+        room_hits = [r for r in ("living_room", "kitchen", "bedroom", "bathroom")
+                     if r in msg or r.split("_")[0] in msg]
         target = None
         for d in self.skills.iot.list():
-            if kw not in d.kind and kw != ("light" if d.kind == "lamp" else d.kind):
-                continue
-            if room_hits and d.room not in room_hits:
-                continue
-            target = d
-            break
+            if d.kind == kind and (not room_hits or d.room in room_hits):
+                target = d
+                break
+        if target is None:
+            for d in self.skills.iot.list():
+                if d.kind == kind:
+                    target = d
+                    break
         if target is None:
             return
-        # Special-case toaster start needs action "start"
-        if target.kind == "toaster":
-            action = "start" if action in ("on", "open") else action
-        if target.kind == "coffee_maker":
-            action = "brew" if action in ("on", "open", "start") else action
-        if target.kind == "curtain":
-            action = action if action in ("open", "close", "toggle") else "toggle"
-        if target.kind == "lamp":
-            action = action if action in ("on", "off", "toggle") else "toggle"
-        # Navigate near, then actuate
+        action, kwargs = action_for(target.kind, msg)
+        if action is None:
+            return
         call("navigate_to_device", device_id=target.device_id)
-        call("set_device", device_id=target.device_id, action=action)
+        if kwargs:
+            call("set_device", device_id=target.device_id, action=action, kwargs=kwargs)
+        else:
+            call("set_device", device_id=target.device_id, action=action)
 
 
 # ---------------------------------------------------------------------------
