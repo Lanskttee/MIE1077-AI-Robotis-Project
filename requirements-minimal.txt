@@ -1,0 +1,7 @@
+# Minimal install for fast iteration — uses mock emotion detector (keys 1..6)
+# instead of DeepFace, so you skip the ~500MB TensorFlow download.
+pygame>=2.5.0
+numpy>=1.24.0
+anthropic>=0.39.0
+python-dotenv>=1.0.0
+pytest>=8.0.0

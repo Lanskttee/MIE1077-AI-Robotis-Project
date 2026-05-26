@@ -1,0 +1,129 @@
+"""Anthropic-style tool schemas + dispatcher.
+
+The tool schemas are written in the JSON-schema dialect that Claude's
+tool-use API expects (see https://docs.claude.com/en/docs/build-with-claude/tool-use).
+
+``dispatch_tool`` maps a (name, input) pair onto the corresponding ``Skills``
+method.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ..action.skills import Skills
+
+
+TOOL_SCHEMAS: list[dict[str, Any]] = [
+    {
+        "name": "navigate_to_room",
+        "description": "Move the robot to the centre of the named room. "
+                       "Returns whether the owner is visible there.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "room": {
+                    "type": "string",
+                    "enum": ["living_room", "kitchen", "bedroom", "bathroom"],
+                    "description": "Which room to go to.",
+                },
+            },
+            "required": ["room"],
+        },
+    },
+    {
+        "name": "navigate_to_device",
+        "description": "Move the robot near a specific IoT device. Useful before "
+                       "actuating something where physical co-location matters.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "device_id": {"type": "string"},
+            },
+            "required": ["device_id"],
+        },
+    },
+    {
+        "name": "find_owner",
+        "description": "Sweep rooms in time-of-day priority until the owner is found. "
+                       "Use this when you don't know where the owner is.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "look_around",
+        "description": "Report the robot's current room, whether the owner is here, "
+                       "and which IoT devices are in this room.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "read_emotion",
+        "description": "Read the owner's facial emotion from the webcam. "
+                       "Only works when the robot is in the same room as the owner.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "speak",
+        "description": "Say something out loud to the owner. Keep it short and "
+                       "natural. Use the owner's detected emotion to shape tone.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "The line to speak."},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "list_devices",
+        "description": "List all IoT devices in the apartment with their current state.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "set_device",
+        "description": "Actuate an IoT device. Supported (device_id, action) pairs: "
+                       "curtain.* -> open|close|toggle; "
+                       "lamp.* -> on|off|toggle|set_brightness(brightness:0..1); "
+                       "toaster.kitchen -> start(level?:1..5)|stop|set_level(level:1..5); "
+                       "coffee.kitchen -> brew|stop.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "device_id": {"type": "string"},
+                "action":    {"type": "string"},
+                "kwargs":    {
+                    "type": "object",
+                    "description": "Action arguments such as {'brightness': 0.5} or {'level': 4}.",
+                    "additionalProperties": True,
+                },
+            },
+            "required": ["device_id", "action"],
+        },
+    },
+]
+
+
+def dispatch_tool(skills: Skills, name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Call the right Skills method, normalising the kwargs payload."""
+    try:
+        if name == "navigate_to_room":
+            return skills.navigate_to_room(tool_input["room"])
+        if name == "navigate_to_device":
+            return skills.navigate_to_device(tool_input["device_id"])
+        if name == "find_owner":
+            return skills.find_owner()
+        if name == "look_around":
+            return skills.look_around()
+        if name == "read_emotion":
+            return skills.read_emotion()
+        if name == "speak":
+            return skills.speak(tool_input.get("text", ""))
+        if name == "list_devices":
+            return skills.list_devices()
+        if name == "set_device":
+            kwargs = tool_input.get("kwargs") or {}
+            return skills.set_device(tool_input["device_id"], tool_input["action"], **kwargs)
+        return {"ok": False, "error": f"unknown tool {name!r}"}
+    except KeyError as e:
+        return {"ok": False, "error": f"missing argument: {e.args[0]}"}
+    except Exception as e:  # pragma: no cover — defensive
+        return {"ok": False, "error": f"tool crashed: {type(e).__name__}: {e}"}
