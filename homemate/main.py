@@ -87,6 +87,14 @@ class App:
         self._anim_accumulator = 0
         self._dt_for_iot = 1.0 / config.FPS
 
+        # Owner wanders the apartment between turns. Pure UI animation —
+        # Skills/eval don't see it (they only run in headless contexts).
+        self._owner_path: list[tuple[int, int]] = []
+        self._owner_step_accum = 0
+        self._owner_idle_frames = 0
+        self.OWNER_STEP_FRAMES = config.ROBOT_STEP_FRAMES * 2   # walks slower than robot
+        self.OWNER_IDLE_FRAMES = config.FPS * 6                 # ~6s between trips
+
     # ---- setup ----
 
     def _build_emotion_detector(self) -> EmotionDetector:
@@ -109,6 +117,11 @@ class App:
         self.skills.owner_found = False
         if isinstance(self.agent, (LLMAgent,)):
             self.agent.history.clear()
+        # Stop any in-flight owner walk so the owner starts fresh in the new room.
+        if hasattr(self, "_owner_path"):
+            self._owner_path.clear()
+            self._owner_step_accum = 0
+            self._owner_idle_frames = 0
 
     # ---- main loop ----
 
@@ -194,7 +207,52 @@ class App:
         if self._anim_accumulator >= config.ROBOT_STEP_FRAMES and self.skills.pending_path:
             self._anim_accumulator = 0
             self.robot.x, self.robot.y = self.skills.pending_path.pop(0)
+        self._tick_owner()
         self.iot.tick(dt)
+
+    def _tick_owner(self) -> None:
+        """Owner wanders to a new random room every few seconds.
+
+        Paused while the agent is mid-turn so the scene stays readable during
+        dialogue / IoT actions. Owner walks at half the robot's speed so the
+        viewer can tell who is who.
+        """
+        if self.agent_busy:
+            return
+        if self._owner_path:
+            self._owner_step_accum += 1
+            if self._owner_step_accum >= self.OWNER_STEP_FRAMES:
+                self._owner_step_accum = 0
+                self.owner.x, self.owner.y = self._owner_path.pop(0)
+                # If the owner walks away from the robot, mark them un-found so
+                # subsequent agent turns will re-locate them.
+                if self.apt.room_name_at(*self.owner.pos) != self.apt.room_name_at(*self.robot.pos):
+                    self.skills.owner_found = False
+            return
+        # No active path — wait OWNER_IDLE_FRAMES, then plan a new trip.
+        self._owner_idle_frames += 1
+        if self._owner_idle_frames >= self.OWNER_IDLE_FRAMES:
+            self._owner_idle_frames = 0
+            self._plan_owner_trip()
+
+    def _plan_owner_trip(self) -> None:
+        """Pick a random different room and compute an A* path to a tile in it."""
+        from .planning.navigator import astar
+        current = self.apt.room_name_at(*self.owner.pos)
+        others = [r for r in self.apt.room_names() if r != current]
+        if not others:
+            return
+        target_room = self.apt.room(self.rng.choice(others))
+        candidates = [(x, y)
+                      for x in range(target_room.x0, target_room.x1 + 1)
+                      for y in range(target_room.y0, target_room.y1 + 1)
+                      if self.apt.is_walkable(x, y)]
+        if not candidates:
+            return
+        target = self.rng.choice(candidates)
+        path = astar(self.apt, self.owner.pos, target)
+        if path and len(path) > 1:
+            self._owner_path = path[1:]   # skip current position
 
     # ---- agent ----
 
