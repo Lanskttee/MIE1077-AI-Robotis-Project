@@ -23,12 +23,15 @@ navigation -> mock IoT.
 
 ## Demo
 
-![HomeMate](docs/images/pygame_demo.png)
+![HomeMate](docs/images/pygame_demo.gif)
 
-Regenerate the screenshot from the current code:
+Scenario: the robot starts in the living room, walks to the bedroom to
+find a tired owner, then crosses to the kitchen and brews coffee. The
+animation is generated headlessly (so it stays in sync with the code):
 
 ```powershell
-python -m homemate.scripts.snapshot
+python -m homemate.scripts.gif_demo    # animated GIF
+python -m homemate.scripts.snapshot    # single-frame PNG
 ```
 
 Confirm the Claude API key is wired up (one short call):
@@ -131,7 +134,7 @@ homemate/
   cognition/          Claude tool-calling loop; JSON tool schemas
   action/             Primitive skills exposed to the LLM
   memory/             JSONL episode log + profile rollup
-  scripts/            live_check.py, snapshot.py
+  scripts/            live_check.py, snapshot.py, gif_demo.py
 tests/
   test_smoke.py       End-to-end MockLLM run
   test_memory.py      Memory module unit tests
