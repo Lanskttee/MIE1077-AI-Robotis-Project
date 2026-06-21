@@ -4,9 +4,9 @@ Each method returns a JSON-serialisable dict that goes back to the LLM as a
 ``tool_result``. Skills are intentionally small — the LLM composes them into
 behaviors.
 
-Navigation is *planned* (path computed via A*) but the actual tile-by-tile
-movement is animated by the main loop using ``pending_path``. The skill
-returns immediately so the LLM loop stays simple.
+Navigation is planned via A* and executed through :class:`homemate.robot.RobotController`.
+The robot teleports to the goal for agent logic while ``pending_path`` is
+animated tile-by-tile in the Pygame UI.
 """
 
 from __future__ import annotations
@@ -14,8 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..perception.emotion import EmotionDetector
-from ..planning.navigator import Navigator, astar
-from ..planning.search import OwnerSearchPolicy
+from ..robot.controller import RobotController
 from ..world.apartment import Apartment
 from ..world.entities import Owner, Robot
 from ..world.iot import IoTNetwork
@@ -35,66 +34,61 @@ class Skills:
         self.owner = owner
         self.iot = iot
         self.emotion = emotion
-        self.navigator = Navigator(apt)
-        self.search = OwnerSearchPolicy(apt.room_names())
-        # path queued for the main loop to animate; the LLM treats nav as instantaneous
+        self.robot_ctrl = RobotController(apt, robot, owner, iot)
         self.pending_path: list[tuple[int, int]] = []
-        # dialogue log (list of (speaker, text)); UI consumes this
         self.dialogue: list[tuple[str, str]] = []
-        # has the robot established line-of-sight with the owner this episode?
         self.owner_found = False
 
     # ---------------------------------------------------------------- navigation
 
     def navigate_to_room(self, room: str) -> dict[str, Any]:
-        """Move to the center of ``room`` (or nearest walkable tile)."""
-        if room not in self.apt.room_names():
-            return {"ok": False, "error": f"unknown room {room!r}",
-                    "rooms": self.apt.room_names()}
-        target = self._closest_walkable(*self.apt.room(room).center)
-        path = astar(self.apt, self.robot.pos, target)
-        if not path:
-            return {"ok": False, "error": f"no path to {room}"}
-        self._commit_path(path)
-        return {
-            "ok": True,
-            "arrived_at_room": room,
-            "tiles_traveled": max(0, len(path) - 1),
-            "owner_visible_here": self._owner_visible_in_room(room),
-        }
+        out = self.robot_ctrl.navigate_to_room_center(room, self.pending_path)
+        if out.get("ok") and out.get("owner_visible_here"):
+            self.owner_found = True
+        return out
 
     def navigate_to_device(self, device_id: str) -> dict[str, Any]:
         dev = self.iot.get(device_id)
         if dev is None:
             return {"ok": False, "error": f"unknown device {device_id}"}
-        return self.navigate_to_room(dev.room)
+        return self.robot_ctrl.navigate_to_device(dev, self.pending_path)
 
     # ---------------------------------------------------------------- search
 
     def find_owner(self) -> dict[str, Any]:
-        """Sweep rooms in time-of-day priority order until the owner is seen."""
-        if self._owner_in_current_room():
+        out = self.robot_ctrl.find_owner_plan(
+            self.pending_path,
+            owner_check=self._owner_in_current_room,
+        )
+        if out.get("ok"):
             self.owner_found = True
-            return {"ok": True, "owner_room": self.owner_room(), "method": "already_here"}
+        else:
+            self.owner_found = False
+        return out
 
-        for room in self.search.ordering(current_room=self.robot_room()):
-            self.navigate_to_room(room)
-            if self._owner_in_current_room():
-                self.owner_found = True
-                return {"ok": True, "owner_room": room, "method": "room_sweep"}
-        self.owner_found = False
-        return {"ok": False, "error": "owner not found in any room"}
+    def scan_room(self, room: str) -> dict[str, Any]:
+        out = self.robot_ctrl.scan_room(
+            room, self.pending_path, owner_check=self._owner_in_current_room,
+        )
+        if out.get("owner_found"):
+            self.owner_found = True
+        return out
 
     # ---------------------------------------------------------------- sensors
 
     def look_around(self) -> dict[str, Any]:
-        room = self.robot_room()
+        obs = self.robot_ctrl.observe_current_room()
+        room = obs.get("room")
         return {
             "ok": True,
             "robot_room": room,
-            "owner_in_this_room": self._owner_in_current_room(),
-            "devices_here": [d.snapshot() for d in self.iot.find(room=room)],
+            "owner_in_this_room": obs.get("owner_visible", False),
+            "devices_here": [d.snapshot() for d in self.iot.find(room=room)] if room else [],
+            "owner_belief": self.robot_ctrl.belief.snapshot(),
         }
+
+    def get_robot_state(self) -> dict[str, Any]:
+        return {"ok": True, **self.robot_ctrl.telemetry()}
 
     def read_emotion(self) -> dict[str, Any]:
         if not self._owner_in_current_room():
@@ -117,7 +111,21 @@ class Skills:
     # ---------------------------------------------------------------- IoT
 
     def set_device(self, device_id: str, action: str, **kwargs: Any) -> dict[str, Any]:
-        return self.iot.act(device_id, action, **kwargs)
+        dev = self.iot.get(device_id)
+        if dev is None:
+            return {"ok": False, "error": f"unknown device {device_id}"}
+        reach = self.robot_ctrl.check_device_reach(dev)
+        if not reach.get("ok"):
+            return {
+                "ok": False,
+                "error": "robot out of device interaction range",
+                "reach": reach,
+                "hint": f"call navigate_to_device({device_id!r}) first",
+            }
+        result = self.iot.act(device_id, action, **kwargs)
+        if result.get("ok"):
+            self.robot_ctrl.mode = "actuating"
+        return result
 
     def list_devices(self) -> dict[str, Any]:
         return {"ok": True, "devices": self.iot.snapshot()}
@@ -125,38 +133,14 @@ class Skills:
     # ---------------------------------------------------------------- helpers
 
     def robot_room(self) -> str | None:
-        return self.apt.room_name_at(*self.robot.pos)
+        return self.robot_ctrl.robot_room()
 
     def owner_room(self) -> str | None:
-        return self.apt.room_name_at(*self.owner.pos)
+        return self.robot_ctrl.owner_room()
 
     def _owner_in_current_room(self) -> bool:
-        rr, orr = self.robot_room(), self.owner_room()
-        return rr is not None and rr == orr
+        return self.robot_ctrl.owner_visible()
 
-    def _owner_visible_in_room(self, room: str) -> bool:
-        return self.owner_room() == room
-
+    # Legacy helper used by gif_demo script
     def _closest_walkable(self, x: int, y: int) -> tuple[int, int]:
-        if self.apt.is_walkable(x, y):
-            return (x, y)
-        # spiral outward
-        for r in range(1, max(self.apt.cols, self.apt.rows)):
-            for dx in range(-r, r + 1):
-                for dy in (-r, r):
-                    nx, ny = x + dx, y + dy
-                    if self.apt.is_walkable(nx, ny):
-                        return (nx, ny)
-                for dy in range(-r + 1, r):
-                    for dx in (-r, r):
-                        nx, ny = x + dx, y + dy
-                        if self.apt.is_walkable(nx, ny):
-                            return (nx, ny)
-        return (x, y)
-
-    def _commit_path(self, path: list[tuple[int, int]]) -> None:
-        """Teleport robot to end (LLM view) and stash the path for animation."""
-        if not path:
-            return
-        self.pending_path.extend(path[1:])  # everything except current pos
-        self.robot.x, self.robot.y = path[-1]
+        return self.robot_ctrl._closest_walkable(x, y)

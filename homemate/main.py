@@ -709,7 +709,11 @@ class App:
         agent_tag = "MockLLM" if isinstance(self.agent, MockLLM) else "Claude"
         busy = "  [thinking...]" if self.agent_busy else ""
         replay = "  [REPLAY]" if self.replay_mode else ""
-        line = (f"{agent_tag}{replay}  |  robot: {robot_r}  owner: {owner_r}  |  {em}  |  "
+        tel = self.skills.robot_ctrl.telemetry()
+        mode = tel.get("mode", "idle")
+        tiles = tel.get("motion", {}).get("total_tiles_traveled", 0)
+        line = (f"{agent_tag}{replay}  |  robot: {robot_r} ({mode}, {tiles}t)  "
+                f"owner: {owner_r}  |  {em}  |  "
                 f"{self.status_msg}{busy}")
         if len(line) > 120:
             line = line[:117] + "..."

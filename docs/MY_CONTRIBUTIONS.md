@@ -162,11 +162,65 @@ python -m homemate.demo_runner --json out/demo_scripts.jsonl --verbose
 
 ---
 
+## 2026-06-09 — 第四批：`homemate/robot/` 机器人核心模块（Robotics 主线）
+
+**目的**：把「机器人本身」从 UI/LLM 层抽离为独立运动+感知+操作栈，体现 MIE1077 机器人课程的技术深度（运动规划、覆盖搜索、概率定位、操作可达性）。
+
+**涉及文件**
+
+| 文件 | 说明 |
+|------|------|
+| `homemate/robot/kinematics.py` | 设备位姿、停靠点 (dock)、Manhattan 操作半径 |
+| `homemate/robot/belief.py` | 主人房间概率信念 `OwnerBelief`（观测更新 + 与时段先验融合） |
+| `homemate/robot/coverage.py` | Boustrophedon 房间覆盖路径（系统化搜索 waypoints） |
+| `homemate/robot/motion.py` | 里程计 `MotionMetrics`（累计 tile 数、导航次数） |
+| `homemate/robot/controller.py` | `RobotController` 统一调度导航/搜索/操作校验 |
+| `homemate/robot/__main__.py` | 离线 benchmark CLI（覆盖代价表 + 信念演示） |
+| `homemate/action/skills.py` | 全面接入 `RobotController` |
+| `homemate/cognition/tools.py` | 新增 `scan_room`、`get_robot_state` 工具（共 11 个） |
+| `tests/test_robot.py` | 8 项机器人层测试 |
+
+### 子系统说明
+
+#### 1. 运动规划与里程计
+- 仍基于 grid A*，通过 `RobotController.commit_path` 统一记录 `path_cost`
+- `get_robot_state` 返回 `pose / mode / motion.total_tiles_traveled`
+- Pygame 顶栏显示 `(mode, Nt)` 累计移动 tile 数
+
+#### 2. 操作可达性（Manipulation）
+- 每个 IoT 设备有 grid 位姿 + **dock 停靠点**（最近可通行操作位）
+- `navigate_to_device` 导航到 dock，而非仅到房间中心
+- `set_device` **强制** Manhattan 距离 ≤ 2，否则返回 `hint: navigate_to_device`
+- 体现「先到位、再操作」的机器人任务约束
+
+#### 3. 概率定位（Owner Belief）
+- `OwnerBelief` 维护 4 房间离散概率分布
+- `look_around` / `find_owner` / `scan_room` 后更新 belief
+- `find_owner` 搜索顺序 = **belief 排序 ⊕ 时段先验**（`OwnerSearchPolicy`）
+
+#### 4. 覆盖搜索（Coverage Search）
+- `CoveragePlanner` 生成 boustrophedon 蛇形 waypoints
+- `find_owner` 在房间中心未见主人时，自动触发 **intra-room scan**
+- 新工具 `scan_room(room)` 可单独调用完整房间 sweep
+
+#### 5. Benchmark CLI
+```powershell
+python -m homemate.robot
+```
+输出每房间：可通行 tile 数、waypoint 数、从 living_room 出发的 sweep 代价。
+
+### 验证结果
+- **83 tests passed**
+- **eval 20/20**（109/109 criteria）— 与原有评估完全兼容
+- **demo_runner 4/4** 脚本通过
+
+---
+
 ## 待办 / 下一批（规划）
 
-- [ ] 启动引导 overlay（首次打开分步提示）
-- [ ] 对话 / 会话导出为 JSON（`SessionStore.export_session` 已有，补 UI 快捷键）
-- [ ] `--script` 链式自动播放（多场景连续录视频）
+- [ ] 动态重规划：主人走动时触发路径重算（与 Pygame owner wander 联动）
+- [ ] 代价地图 / 转向惩罚 A*（`planning/costmap.py`）
+- [ ] `--script` 链式自动播放
 - [ ] Replay 面板点击 session 条目直接加载
 
 ---
@@ -203,6 +257,12 @@ homemate/demo_scripts.py
 homemate/world_snapshot.py
 homemate/session/store.py
 homemate/session/replay.py
+homemate/robot/kinematics.py
+homemate/robot/belief.py
+homemate/robot/coverage.py
+homemate/robot/motion.py
+homemate/robot/controller.py
+homemate/robot/__main__.py
 homemate/demo_runner/runner.py
 homemate/demo_runner/__main__.py
 tests/test_ui_options.py
@@ -211,5 +271,8 @@ tests/test_demo_scripts.py
 tests/test_world_snapshot.py
 tests/test_session.py
 tests/test_demo_runner.py
+tests/test_robot.py
 homemate/main.py   (大幅增强)
+homemate/action/skills.py  (接入 RobotController)
+homemate/cognition/tools.py  (+scan_room, +get_robot_state)
 ```
