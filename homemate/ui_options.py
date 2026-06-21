@@ -25,6 +25,9 @@ class MainOptions:
     auto_message: str | None = None
     load_snapshot: str | None = None
     snapshot_path: str = "data/scenarios/last_snapshot.json"
+    record_session: bool = True
+    replay_session: str | None = None
+    session_title: str | None = None
 
 
 def parse_main_args(argv: list[str] | None = None) -> MainOptions:
@@ -84,6 +87,22 @@ def parse_main_args(argv: list[str] | None = None) -> MainOptions:
         "--list-scripts", action="store_true",
         help="Print available demo scripts and exit.",
     )
+    p.add_argument(
+        "--no-record", action="store_true",
+        help="Disable automatic session recording to data/sessions/.",
+    )
+    p.add_argument(
+        "--replay-session", default=None, metavar="ID_OR_PATH",
+        help="Load a recorded session and enter replay mode.",
+    )
+    p.add_argument(
+        "--list-sessions", action="store_true",
+        help="Print recorded sessions and exit.",
+    )
+    p.add_argument(
+        "--session-title", default=None,
+        help="Custom title for the session file created on startup.",
+    )
     args = p.parse_args(argv)
 
     if args.list_scripts:
@@ -93,6 +112,16 @@ def parse_main_args(argv: list[str] | None = None) -> MainOptions:
             print(f"{'':16}  {s.description}")
             print(f"{'':16}  message: {s.message!r}")
             print()
+        raise SystemExit(0)
+
+    if getattr(args, "list_sessions", False):
+        from .session import SessionStore
+        store = SessionStore()
+        rows = store.list_sessions()
+        if not rows:
+            print("No sessions found under data/sessions/")
+        for row in rows:
+            print(f"{row['session_id']:<32}  turns={row['turns']}  {row['title']}")
         raise SystemExit(0)
 
     offline = args.offline
@@ -105,6 +134,9 @@ def parse_main_args(argv: list[str] | None = None) -> MainOptions:
         freeze_owner=args.freeze_owner or offline or bool(args.script),
         auto_run=args.auto_run,
         load_snapshot=args.load_snapshot,
+        record_session=not args.no_record,
+        replay_session=args.replay_session,
+        session_title=args.session_title,
     )
     if args.script:
         from .demo_scripts import apply_script

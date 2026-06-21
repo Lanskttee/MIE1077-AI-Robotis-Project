@@ -14,6 +14,9 @@ Key bindings:
     PgUp/Dn scroll the dialogue panel
     F5      save world snapshot (robot, owner, all IoT states)
     F9      load last saved snapshot
+    p       toggle session replay mode (step through recorded turns)
+    [/]     previous / next replay turn (when replay mode is on)
+    v       open Replay sidebar panel
     w       toggle real webcam emotion detection on/off
     r       reset scenario (re-randomise owner position)
     c       clear long-term memory store
@@ -44,6 +47,7 @@ from .memory import MemoryStore  # noqa: E402
 from .perception.emotion import (  # noqa: E402
     DeepFaceEmotionDetector, EmotionDetector, MockEmotionDetector,
 )
+from .session import ReplayController, SessionStore, TurnRecord  # noqa: E402
 from .ui_options import MainOptions, parse_main_args  # noqa: E402
 from .ui_devices import format_device_summary, group_devices_by_room  # noqa: E402
 from .ui_trace import format_tool_step  # noqa: E402
@@ -53,7 +57,7 @@ from .world.entities import Owner, Robot, place_in_room, random_room  # noqa: E4
 from .world.iot import IoTNetwork  # noqa: E402
 
 
-SIDEBAR_PANELS = ("dialogue", "trace", "memory", "devices")
+SIDEBAR_PANELS = ("dialogue", "trace", "memory", "devices", "replay")
 AUTO_RUN_DELAY_FRAMES = 45
 
 
@@ -90,6 +94,9 @@ class App:
 
         self.skills = Skills(self.apt, self.robot, self.owner, self.iot, self.emotion)
         self.memory = MemoryStore()
+        self.session_store = SessionStore()
+        self.replay: ReplayController | None = None
+        self.replay_mode = False
         self.agent: LLMAgent | MockLLM = self._build_agent()
 
         # UI state
@@ -122,6 +129,23 @@ class App:
                 self.status_msg = f"Loaded snapshot: {self.opts.load_snapshot}"
             except (OSError, ValueError) as e:
                 self.status_msg = f"Snapshot load failed: {e}"
+        elif self.opts.replay_session:
+            self._load_replay_session(self.opts.replay_session)
+        elif self.opts.record_session:
+            title = self.opts.session_title or (
+                f"script:{self.opts.script}" if self.opts.script else "Pygame demo"
+            )
+            self.session_store.start_session(
+                title=title,
+                script=self.opts.script,
+                opts={
+                    "seed": self.opts.seed,
+                    "owner_room": self.opts.owner_room,
+                    "emotion": self.opts.emotion,
+                    "mock_llm": self.opts.mock_llm,
+                },
+            )
+            self.status_msg = f"Recording session: {self.session_store.active.session_id}"
 
     # ---- setup ----
 
@@ -220,6 +244,9 @@ class App:
         if ev.key == pygame.K_ESCAPE:
             return False
         if ev.key == pygame.K_RETURN:
+            if self.replay_mode:
+                self.status_msg = "Replay mode — press p to exit before sending new requests."
+                return True
             self.input_active = True
             return True
         if ev.key == pygame.K_r:
@@ -244,6 +271,18 @@ class App:
             return True
         if ev.key == pygame.K_i:
             self.sidebar_panel = "devices"
+            return True
+        if ev.key == pygame.K_v:
+            self.sidebar_panel = "replay"
+            return True
+        if ev.key == pygame.K_p:
+            self._toggle_replay_mode()
+            return True
+        if ev.key == pygame.K_LEFTBRACKET:
+            self._step_replay(-1)
+            return True
+        if ev.key == pygame.K_RIGHTBRACKET:
+            self._step_replay(1)
             return True
         if ev.key == pygame.K_F5:
             self._save_snapshot_to_default()
@@ -333,6 +372,61 @@ class App:
             self.apt.room_name_at(*self.robot.pos) == self.apt.room_name_at(*self.owner.pos)
         )
 
+    def _load_replay_session(self, session_id_or_path: str) -> None:
+        try:
+            rec = self.session_store.load(session_id_or_path)
+        except (OSError, ValueError) as e:
+            self.status_msg = f"Replay load failed: {e}"
+            return
+        self.replay = ReplayController(rec)
+        self.replay_mode = True
+        self._apply_replay_turn()
+        self.sidebar_panel = "replay"
+        self.status_msg = self.replay.summary_line()
+
+    def _toggle_replay_mode(self) -> None:
+        if self.replay is None:
+            active = self.session_store.active
+            if active and active.turns:
+                self.replay = ReplayController(active)
+            else:
+                self.status_msg = "No recorded turns to replay yet."
+                return
+        self.replay_mode = not self.replay_mode
+        if self.replay_mode:
+            self._apply_replay_turn()
+            self.sidebar_panel = "replay"
+            self.status_msg = self.replay.summary_line() if self.replay else "Replay on."
+        else:
+            self.status_msg = "Replay mode off — live demo resumed."
+
+    def _step_replay(self, delta: int) -> None:
+        if self.replay is None or not self.replay.turn_count:
+            self.status_msg = "No session loaded for replay."
+            return
+        if not self.replay_mode:
+            self.replay_mode = True
+        self.replay.step(delta)
+        self._apply_replay_turn()
+        self.status_msg = self.replay.summary_line()
+
+    def _apply_replay_turn(self) -> None:
+        if self.replay is None:
+            return
+        self.replay.apply_world(
+            robot=self.robot, owner=self.owner, iot=self.iot, phase="after",
+        )
+        self.skills.pending_path.clear()
+        self.skills.owner_found = (
+            self.apt.room_name_at(*self.robot.pos) == self.apt.room_name_at(*self.owner.pos)
+        )
+        turn = self.replay.current
+        if turn is None:
+            return
+        self.skills.dialogue = self.replay.dialogue_upto_current()
+        self.last_tool_trace = list(turn.tool_trace)
+        self.last_agent_summary = turn.final_text
+        self.dialogue_scroll = 0
 
     def _tick_owner(self) -> None:
         if self.agent_busy:
@@ -371,9 +465,13 @@ class App:
     # ---- agent ----
 
     def _run_agent_async(self, message: str) -> None:
+        if self.replay_mode:
+            self.status_msg = "Exit replay mode (p) before sending a new request."
+            return
         if self.agent_busy:
             self.status_msg = "Agent is still working on the previous request."
             return
+        world_before = self._capture_snapshot_payload()
         self.agent_busy = True
         agent_name = "MockLLM" if isinstance(self.agent, MockLLM) else "Agent"
         self.status_msg = f"Sending to {agent_name}: {message[:60]}"
@@ -396,6 +494,7 @@ class App:
                     self.skills.dialogue.append(
                         ("system", f"{n_fail} tool step(s) failed — open Actions panel (a)."))
                 self.sidebar_panel = "trace"
+                self._record_turn(message, world_before, res)
             except Exception as e:
                 self.last_tool_trace = []
                 self.skills.dialogue.append(("system", f"[agent error] {e}"))
@@ -405,6 +504,30 @@ class App:
                 self.agent_busy = False
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _record_turn(self, message: str, world_before: dict[str, Any],
+                     res: TurnResult) -> None:
+        if not self.opts.record_session or self.session_store.active is None:
+            return
+        emotion_label: str | None = None
+        for step in res.tool_trace:
+            if step.get("name") == "read_emotion":
+                out = step.get("output") or {}
+                if out.get("ok"):
+                    emotion_label = out.get("emotion")
+        turn = TurnRecord(
+            timestamp="",
+            user_message=message,
+            world_before=world_before,
+            world_after=self._capture_snapshot_payload(),
+            tool_trace=list(res.tool_trace),
+            spoken=list(res.spoken),
+            final_text=res.final_text,
+            emotion_label=emotion_label,
+        )
+        self.session_store.append_turn(turn)
+        self.replay = ReplayController(self.session_store.active)
+        self.status_msg += f"  [saved turn {len(self.session_store.active.turns)}]"
 
     # ---- rendering ----
 
@@ -585,7 +708,8 @@ class App:
         owner_r = self.skills.owner_room()
         agent_tag = "MockLLM" if isinstance(self.agent, MockLLM) else "Claude"
         busy = "  [thinking...]" if self.agent_busy else ""
-        line = (f"{agent_tag}  |  robot: {robot_r}  owner: {owner_r}  |  {em}  |  "
+        replay = "  [REPLAY]" if self.replay_mode else ""
+        line = (f"{agent_tag}{replay}  |  robot: {robot_r}  owner: {owner_r}  |  {em}  |  "
                 f"{self.status_msg}{busy}")
         if len(line) > 120:
             line = line[:117] + "..."
@@ -608,11 +732,13 @@ class App:
             self._draw_trace_panel(x0, content_top, w, content_bottom)
         elif self.sidebar_panel == "memory":
             self._draw_memory_panel(x0, content_top, w, content_bottom)
-        else:
+        elif self.sidebar_panel == "devices":
             self._draw_devices_panel(x0, content_top, w, content_bottom)
+        else:
+            self._draw_replay_panel(x0, content_top, w, content_bottom)
         keys = [
-            "Tab/d/a/m/i: panels  |  Enter: ask  |  F5/F9: save/load",
-            "PgUp/Dn: scroll  |  c: clear mem  |  r: reset  |  Esc: quit",
+            "Tab/d/a/m/i/v: panels  |  p/[/]: replay  |  Enter: ask",
+            "F5/F9: snapshot  |  c: clear mem  |  r: reset  |  Esc: quit",
         ]
         for i, k in enumerate(keys):
             self.screen.blit(self.font_sm.render(k, True, config.PALETTE.text_dim),
@@ -624,6 +750,7 @@ class App:
             ("trace", "Act"),
             ("memory", "Mem"),
             ("devices", "IoT"),
+            ("replay", "Replay"),
         )
         tab_w = w // len(labels)
         for i, (key, label) in enumerate(labels):
@@ -743,6 +870,57 @@ class App:
                     )
                     y += 15
             y += 4
+
+    def _draw_replay_panel(self, x0: int, y0: int, w: int, y_max: int) -> None:
+        y = y0 + 4
+        if self.replay is None:
+            active = self.session_store.active
+            if active is None:
+                msg = "Session recording disabled or not started."
+            else:
+                msg = (
+                    f"Recording: {active.session_id}\n"
+                    f"Turns so far: {len(active.turns)}\n"
+                    f"Complete a request, then press p to replay."
+                )
+            for line in msg.split("\n"):
+                for wrapped in self._wrap(line, 42):
+                    self.screen.blit(
+                        self.font_sm.render(wrapped, True, config.PALETTE.text_dim),
+                        (x0 + 12, y),
+                    )
+                    y += 16
+            return
+        meta = self.replay.turn_meta()
+        header = self.replay.summary_line()
+        self.screen.blit(self.font_sm.render(header, True, config.PALETTE.accent),
+                         (x0 + 12, y))
+        y += 20
+        if meta:
+            details = [
+                f"Tools: {meta.get('tools_ok', 0)}/{meta.get('tool_calls', 0)} ok",
+                f"Spoken lines: {meta.get('spoken_lines', 0)}",
+                f"Emotion: {meta.get('emotion') or '--'}",
+            ]
+            for d in details:
+                self.screen.blit(self.font_sm.render(d, True, config.PALETTE.text),
+                                 (x0 + 12, y))
+                y += 16
+        y += 6
+        hint = "p: toggle replay  |  [: prev  |  ]: next turn"
+        self.screen.blit(self.font_sm.render(hint, True, config.PALETTE.text_dim),
+                         (x0 + 12, y))
+        y += 20
+        self.screen.blit(self.font_sm.render("Recent sessions:", True, config.PALETTE.warn),
+                         (x0 + 12, y))
+        y += 16
+        for row in self.session_store.list_sessions()[:6]:
+            if y > y_max:
+                break
+            line = f"{row['session_id'][:28]}  ({row['turns']} turns)"
+            self.screen.blit(self.font_sm.render(line, True, config.PALETTE.text_dim),
+                             (x0 + 12, y))
+            y += 15
 
     def _draw_input_box(self) -> None:
         box_w, box_h = 600, 56

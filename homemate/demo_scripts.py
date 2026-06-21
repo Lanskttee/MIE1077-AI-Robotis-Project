@@ -90,4 +90,7 @@ def apply_script(base: MainOptions, script_id: str) -> MainOptions:
         auto_message=script.message if base.auto_run else None,
         load_snapshot=base.load_snapshot,
         snapshot_path=base.snapshot_path,
+        record_session=base.record_session,
+        replay_session=base.replay_session,
+        session_title=base.session_title or script.title,
     )
