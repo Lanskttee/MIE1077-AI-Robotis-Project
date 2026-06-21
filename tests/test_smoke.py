@@ -103,6 +103,10 @@ def test_tool_dispatch_full_loop() -> None:
     assert out["ok"]
     assert skills.dialogue[-1] == ("robot", "Hi, I'm here.")
 
+    # navigate to device dock before actuation (manipulation range check)
+    out = dispatch_tool(skills, "navigate_to_device", {"device_id": "curtain.bedroom"})
+    assert out["ok"]
+
     # set_device
     out = dispatch_tool(skills, "set_device",
                         {"device_id": "curtain.bedroom", "action": "open"})
