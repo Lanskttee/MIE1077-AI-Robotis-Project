@@ -333,6 +333,13 @@ class App:
         if self._anim_accumulator >= config.ROBOT_STEP_FRAMES and self.skills.pending_path:
             self._anim_accumulator = 0
             self.robot.x, self.robot.y = self.skills.pending_path.pop(0)
+            self.skills.robot_ctrl.update_map()
+            res = self.skills.replan_if_needed(teleport=False)
+            if res and res.get("replanned"):
+                self.status_msg = (
+                    f"Replan ({res.get('reason')}): "
+                    f"{res.get('tile_steps')} tiles, planner={res.get('planner')}"
+                )
         if not self.opts.freeze_owner:
             self._tick_owner()
         self.iot.tick(dt)
@@ -438,6 +445,8 @@ class App:
                 self.owner.x, self.owner.y = self._owner_path.pop(0)
                 if self.apt.room_name_at(*self.owner.pos) != self.apt.room_name_at(*self.robot.pos):
                     self.skills.owner_found = False
+                if self.skills.pending_path:
+                    self.skills.replan_if_needed(teleport=False)
             return
         self._owner_idle_frames += 1
         if self._owner_idle_frames >= self.OWNER_IDLE_FRAMES:
@@ -564,6 +573,10 @@ class App:
         for r in self.apt.rooms:
             label = self.font_sm.render(r.name, True, config.PALETTE.text_dim)
             self.screen.blit(label, (r.x0 * T + 6, r.y0 * T + offset_y + 4))
+        for (x, y), state in self.skills.robot_ctrl.map.cells.items():
+            if state == 0:  # FREE
+                rect = pygame.Rect(x * T + 2, y * T + offset_y + 2, T - 4, T - 4)
+                pygame.draw.rect(self.screen, (40, 70, 50), rect, border_radius=2)
         for d in self.iot.list():
             self._draw_device(d, offset_y)
         if self.skills.pending_path:

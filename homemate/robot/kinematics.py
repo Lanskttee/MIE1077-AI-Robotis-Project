@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from ..planning.navigator import Coord, astar
+from ..planning.costmap import PlannerConfig, astar_costmap
+from ..planning.navigator import Coord
 from ..world.apartment import Apartment
 from ..world.iot import IoTDevice
 
@@ -55,17 +56,18 @@ def dock_candidates(apt: Apartment, device_pos: Coord) -> list[Coord]:
     return candidates
 
 
-def nearest_dock(apt: Apartment, robot_pos: Coord, device_pos: Coord) -> Coord | None:
-    """Pick the reachable dock tile with minimum A* path cost."""
+def nearest_dock(apt: Apartment, robot_pos: Coord, device_pos: Coord,
+                 *, owner_pos: Coord | None = None) -> Coord | None:
+    """Pick the reachable dock tile with minimum costmap path cost."""
     best: Coord | None = None
     best_cost = 1 << 30
+    cfg = PlannerConfig()
     for dock in dock_candidates(apt, device_pos):
-        path = astar(apt, robot_pos, dock)
-        if not path:
+        plan = astar_costmap(apt, robot_pos, dock, owner_pos=owner_pos, config=cfg)
+        if not plan.path:
             continue
-        cost = len(path) - 1
-        if cost < best_cost:
-            best_cost = cost
+        if plan.total_cost < best_cost:
+            best_cost = plan.total_cost
             best = dock
     return best
 

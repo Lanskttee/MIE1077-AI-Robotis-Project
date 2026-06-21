@@ -97,8 +97,55 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "get_robot_state",
         "description": "Return the robot pose, navigation mode, motion odometry, "
-                       "and probabilistic belief over the owner's room.",
+                       "occupancy map stats, path tracker, and probabilistic "
+                       "belief over the owner's room.",
         "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "plan_device_route",
+        "description": "Compute an optimized visit order for multiple IoT devices "
+                       "using costmap distances and TSP heuristics (nearest-neighbor "
+                       "+ 2-opt). Does not move the robot.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "device_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Device IDs to visit, e.g. ['coffee.kitchen', 'lamp.bedroom'].",
+                },
+            },
+            "required": ["device_ids"],
+        },
+    },
+    {
+        "name": "visit_devices",
+        "description": "Navigate along an optimized multi-device tour. Call before "
+                       "actuating each device with set_device.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "device_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["device_ids"],
+        },
+    },
+    {
+        "name": "explore_frontier",
+        "description": "Active mapping: navigate toward unknown map frontiers to "
+                       "expand coverage. May locate the owner.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "max_hops": {
+                    "type": "integer",
+                    "description": "Max frontier targets to visit (default 3).",
+                },
+            },
+        },
     },
     {
         "name": "make_plan",
@@ -169,6 +216,12 @@ def dispatch_tool(skills: Skills, name: str, tool_input: dict[str, Any]) -> dict
             return skills.scan_room(tool_input["room"])
         if name == "get_robot_state":
             return skills.get_robot_state()
+        if name == "plan_device_route":
+            return skills.plan_device_route(tool_input.get("device_ids") or [])
+        if name == "visit_devices":
+            return skills.visit_devices(tool_input.get("device_ids") or [])
+        if name == "explore_frontier":
+            return skills.explore_frontier(int(tool_input.get("max_hops") or 3))
         if name == "make_plan":
             # Lazy import: avoids cognition <-> planning cycle at module load.
             from ..planning.react import ReActPlanner

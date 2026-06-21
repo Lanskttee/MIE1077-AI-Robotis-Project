@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from ..planning.navigator import Coord, astar
+from ..planning.costmap import astar_costmap
+from ..planning.navigator import Coord
 from ..world.apartment import Apartment
 
 
@@ -36,7 +37,8 @@ class CoveragePlanner:
             out.extend((x, y) for x in xs)
         return out
 
-    def plan_sweep(self, room_name: str, start: Coord) -> list[Coord]:
+    def plan_sweep(self, room_name: str, start: Coord,
+                   *, owner_pos: Coord | None = None) -> list[Coord]:
         """Full path visiting coverage waypoints, starting from ``start``."""
         wps = self.waypoints(room_name)
         if not wps:
@@ -46,11 +48,13 @@ class CoveragePlanner:
         for wp in wps:
             if wp == cur:
                 continue
-            segment = astar(self.apt, cur, wp)
+            plan = astar_costmap(self.apt, cur, wp, owner_pos=owner_pos)
+            segment = plan.path
             if segment and len(segment) > 1:
                 path.extend(segment[1:])
                 cur = wp
         return path
 
-    def estimate_scan_cost(self, room_name: str, start: Coord) -> int:
-        return max(0, len(self.plan_sweep(room_name, start)) - 1)
+    def estimate_scan_cost(self, room_name: str, start: Coord,
+                           *, owner_pos: Coord | None = None) -> int:
+        return max(0, len(self.plan_sweep(room_name, start, owner_pos=owner_pos)) - 1)

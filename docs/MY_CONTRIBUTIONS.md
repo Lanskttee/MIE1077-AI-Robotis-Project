@@ -216,10 +216,74 @@ python -m homemate.robot
 
 ---
 
+## 2026-06-09 — 第五批：代价地图 A* + 动态重规划
+
+**目的**：引入带转向惩罚的状态空间 A*、动态障碍代价（主人格阻塞 + 邻格 proximity cost）、Pygame 运行时重规划。
+
+**涉及文件**
+
+| 文件 | 说明 |
+|------|------|
+| `homemate/planning/costmap.py` | `PlannerConfig` / `PlanResult` / `astar_costmap()` / `compare_planners()` |
+| `homemate/robot/path_tracker.py` | `PathTracker` — 活跃目标、主人跟踪、阻塞检测 |
+| `homemate/robot/controller.py` | 默认 costmap 规划；`try_replan()` / `check_replan_reason()` |
+| `homemate/robot/motion.py` | 新增 `replan_count` / `turn_count` / `last_planner` |
+| `homemate/robot/kinematics.py` / `coverage.py` | dock 与 sweep 改用 costmap |
+| `homemate/action/skills.py` | `replan_if_needed()` |
+| `homemate/main.py` | 每帧 + 主人 wander 时触发重规划 |
+| `tests/test_costmap.py` | 8 项测试 |
+
+**要点**
+- 状态空间 `(x, y, dir)` + 转向惩罚 + 过门 cost + 主人 social navigation
+- `find_owner` 成功后自动 `enable_owner_tracking()`
+- fallback A* 仍避开主人格
+
+---
+
+## 2026-06-09 — 第六批：占据栅格 + 多目标路径优化（TSP）
+
+**目的**：经典移动机器人 **Occupancy Grid + Frontier Exploration**，以及多 IoT 设备 **TSP 路径优化**（nearest-neighbor + 2-opt）。
+
+**涉及文件**
+
+| 文件 | 说明 |
+|------|------|
+| `homemate/robot/occupancy.py` | `OccupancyGrid` — unknown/free/occupied、frontier 选取 |
+| `homemate/robot/route_optimizer.py` | `RouteOptimizer` — 多设备 dock 访问顺序优化 |
+| `homemate/robot/controller.py` | `explore_frontier()` / `plan_device_route()` / `execute_device_route()` |
+| `homemate/cognition/tools.py` | 新增 3 工具（共 14 个）：`plan_device_route` / `visit_devices` / `explore_frontier` |
+| `homemate/main.py` | 已探索区域淡绿色 overlay |
+| `homemate/robot/__main__.py` | benchmark 增加 costmap 对比 + 多设备 route |
+| `tests/test_occupancy.py` | 4 项占据栅格测试 |
+| `tests/test_route_optimizer.py` | 3 项路径优化测试 |
+
+**新工具用法**
+```powershell
+# 规划多设备最优访问顺序（不移动）
+# tool: plan_device_route(device_ids=["coffee.kitchen","lamp.bedroom"])
+
+# 沿优化路线依次导航到各设备 dock
+# tool: visit_devices(device_ids=[...])
+
+# 主动探索未知 frontier（辅助找主人）
+# tool: explore_frontier(max_hops=3)
+```
+
+**find_owner 增强**：belief sweep + coverage scan 失败后，自动尝试 **frontier_explore**（最多 2 hop）。
+
+### 验证结果（第五+六批后）
+- **98 tests passed**
+- **eval 20/20**（109/109 criteria）
+- **demo_runner 4/4**
+
+---
+
 ## 待办 / 下一批（规划）
 
-- [ ] 动态重规划：主人走动时触发路径重算（与 Pygame owner wander 联动）
-- [ ] 代价地图 / 转向惩罚 A*（`planning/costmap.py`）
+- [x] 动态重规划：主人走动时触发路径重算
+- [x] 代价地图 / 转向惩罚 A*（`planning/costmap.py`）
+- [x] 占据栅格 + frontier 探索
+- [x] 多设备 TSP 路径优化
 - [ ] `--script` 链式自动播放
 - [ ] Replay 面板点击 session 条目直接加载
 
@@ -266,6 +330,13 @@ homemate/robot/coverage.py
 homemate/robot/motion.py
 homemate/robot/controller.py
 homemate/robot/__main__.py
+homemate/planning/costmap.py
+homemate/robot/path_tracker.py
+homemate/robot/occupancy.py
+homemate/robot/route_optimizer.py
+tests/test_costmap.py
+tests/test_occupancy.py
+tests/test_route_optimizer.py
 homemate/demo_runner/runner.py
 homemate/demo_runner/__main__.py
 tests/test_ui_options.py

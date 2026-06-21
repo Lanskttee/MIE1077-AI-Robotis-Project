@@ -74,6 +74,22 @@ class Skills:
             self.owner_found = True
         return out
 
+    def explore_frontier(self, max_hops: int = 3) -> dict[str, Any]:
+        out = self.robot_ctrl.explore_frontier(
+            self.pending_path,
+            owner_check=self._owner_in_current_room,
+            max_hops=max_hops,
+        )
+        if out.get("owner_found"):
+            self.owner_found = True
+        return out
+
+    def plan_device_route(self, device_ids: list[str]) -> dict[str, Any]:
+        return self.robot_ctrl.plan_device_route(device_ids)
+
+    def visit_devices(self, device_ids: list[str]) -> dict[str, Any]:
+        return self.robot_ctrl.execute_device_route(device_ids, self.pending_path)
+
     # ---------------------------------------------------------------- sensors
 
     def look_around(self) -> dict[str, Any]:
@@ -129,6 +145,12 @@ class Skills:
 
     def list_devices(self) -> dict[str, Any]:
         return {"ok": True, "devices": self.iot.snapshot()}
+
+    def replan_if_needed(self, *, teleport: bool = False) -> dict[str, Any] | None:
+        reason = self.robot_ctrl.check_replan_reason(self.pending_path)
+        if reason is None:
+            return None
+        return self.robot_ctrl.try_replan(self.pending_path, reason=reason, teleport=teleport)
 
     # ---------------------------------------------------------------- helpers
 
