@@ -234,6 +234,9 @@ python -m homemate.main --script tired_coffee --auto-run
 # 批量验证 4 个演示脚本（报告用表格）
 python -m homemate.demo_runner
 
+# 机器人覆盖/信念 benchmark（报告用表格）
+python -m homemate.robot
+
 # 列出已录制的会话
 python -m homemate.main --list-sessions
 
