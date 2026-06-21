@@ -1,23 +1,10 @@
 # 新增功能记录（Contributions Log）
 
-本文件记录 **UI / 演示增强 / 离线工具链** 方向的开发与后续追加内容，便于组内同步贡献与演示说明。
-
-维护约定：每次新增功能在此追加一条记录（日期 + 模块 + 说明 + 用法）。
-
 ---
 
-## 2026-06-09 — 第一批：离线演示 UI 增强
+## 离线演示 UI 增强
 
-**涉及文件**
 
-| 文件 | 说明 |
-|------|------|
-| `homemate/ui_options.py` | Pygame 启动 CLI 参数解析 |
-| `homemate/ui_trace.py` | Agent 工具轨迹格式化（无 pygame 依赖，可单测） |
-| `homemate/main.py` | 侧栏、进度条、离线模式、键盘交互 |
-| `tests/test_ui_options.py` | CLI 与轨迹格式化单元测试 |
-
-**功能清单**
 
 1. **离线演示模式 `--offline`**
    - 等价于 `--mock-llm --mock-emotion --freeze-owner`
@@ -57,21 +44,9 @@
 
 ---
 
-## 2026-06-09 — 第二批：演示脚本 + 世界快照 + IoT 面板
+## 演示脚本 + 世界快照 + IoT 面板
 
-**涉及文件**
 
-| 文件 | 说明 |
-|------|------|
-| `homemate/demo_scripts.py` | 内置可复现演示脚本 |
-| `homemate/world_snapshot.py` | 世界状态 JSON 快照 save/load |
-| `homemate/ui_devices.py` | IoT 侧栏格式化 |
-| `homemate/main.py` | 自动运行、F5/F9 快照、Devices 面板 |
-| `tests/test_demo_scripts.py` | 演示脚本测试 |
-| `tests/test_world_snapshot.py` | 快照 round-trip 测试 |
-| `tests/test_ui_devices.py` | IoT 格式化测试 |
-
-**功能清单**
 
 1. **内置演示脚本 `--script`**
    ```powershell
@@ -96,20 +71,12 @@
 
 ---
 
-## 2026-06-09 — 第三批：会话录制/回放模块 + 批量演示运行器
+## 会话录制/回放模块 + 批量演示运行器
 
 ### 模块 A — `homemate/session/`（完整功能模块）
 
-**目的**：把每次 Pygame 交互完整落盘，支持逐步回放，用于录视频、调试、课程报告附件。
+把每次 Pygame 交互完整落盘，支持逐步回放，用于录视频、调试、课程报告附件。
 
-**涉及文件**
-
-| 文件 | 说明 |
-|------|------|
-| `homemate/session/store.py` | `SessionStore` / `TurnRecord` / `SessionRecord` |
-| `homemate/session/replay.py` | `ReplayController` 逐步恢复 world + dialogue + tool trace |
-| `homemate/main.py` | 自动录制、回放模式、`[/]` 步进 |
-| `tests/test_session.py` | 录制 / 加载 / 回放 / 导出测试 |
 
 **数据落盘**：`data/sessions/<timestamp>_<script>.json`
 
@@ -140,15 +107,9 @@ python -m homemate.main --session-title "My demo"
 
 ### 模块 B — `homemate/demo_runner/`（完整功能模块）
 
-**目的**：无 GUI、无 API 地批量跑完 4 个内置演示脚本，输出通过/失败表，可直接贴进课程报告。
+无 GUI、无 API 地批量跑完 4 个内置演示脚本，输出通过/失败表，可直接贴进课程报告。
 
-**涉及文件**
 
-| 文件 | 说明 |
-|------|------|
-| `homemate/demo_runner/runner.py` | `DemoBatchRunner` + 检查项（find_owner / read_emotion / speak / IoT） |
-| `homemate/demo_runner/__main__.py` | CLI 入口 |
-| `tests/test_demo_runner.py` | 全脚本通过性测试 |
 
 **用法**
 
@@ -162,9 +123,9 @@ python -m homemate.demo_runner --json out/demo_scripts.jsonl --verbose
 
 ---
 
-## 2026-06-09 — 第四批：`homemate/robot/` 机器人核心模块（Robotics 主线）
+## `homemate/robot/` 机器人核心模块（Robotics 主线）
 
-**目的**：把「机器人本身」从 UI/LLM 层抽离为独立运动+感知+操作栈，体现 MIE1077 机器人课程的技术深度（运动规划、覆盖搜索、概率定位、操作可达性）。
+把机器人本身从 UI/LLM 层抽离为独立运动+感知+操作栈（运动规划、覆盖搜索、概率定位、操作可达性）。
 
 **涉及文件**
 
@@ -209,55 +170,27 @@ python -m homemate.robot
 ```
 输出每房间：可通行 tile 数、waypoint 数、从 living_room 出发的 sweep 代价。
 
-### 验证结果
-- **83 tests passed**
-- **eval 20/20**（109/109 criteria）— 与原有评估完全兼容
-- **demo_runner 4/4** 脚本通过
+
 
 ---
 
-## 2026-06-09 — 第五批：代价地图 A* + 动态重规划
+## 代价地图 A* + 动态重规划
 
-**目的**：引入带转向惩罚的状态空间 A*、动态障碍代价（主人格阻塞 + 邻格 proximity cost）、Pygame 运行时重规划。
+引入带转向惩罚的状态空间 A*、动态障碍代价（主人格阻塞 + 邻格 proximity cost）、Pygame 运行时重规划。
 
-**涉及文件**
 
-| 文件 | 说明 |
-|------|------|
-| `homemate/planning/costmap.py` | `PlannerConfig` / `PlanResult` / `astar_costmap()` / `compare_planners()` |
-| `homemate/robot/path_tracker.py` | `PathTracker` — 活跃目标、主人跟踪、阻塞检测 |
-| `homemate/robot/controller.py` | 默认 costmap 规划；`try_replan()` / `check_replan_reason()` |
-| `homemate/robot/motion.py` | 新增 `replan_count` / `turn_count` / `last_planner` |
-| `homemate/robot/kinematics.py` / `coverage.py` | dock 与 sweep 改用 costmap |
-| `homemate/action/skills.py` | `replan_if_needed()` |
-| `homemate/main.py` | 每帧 + 主人 wander 时触发重规划 |
-| `tests/test_costmap.py` | 8 项测试 |
 
-**要点**
 - 状态空间 `(x, y, dir)` + 转向惩罚 + 过门 cost + 主人 social navigation
 - `find_owner` 成功后自动 `enable_owner_tracking()`
 - fallback A* 仍避开主人格
 
 ---
 
-## 2026-06-09 — 第六批：占据栅格 + 多目标路径优化（TSP）
+## 占据栅格 + 多目标路径优化（TSP）
 
-**目的**：经典移动机器人 **Occupancy Grid + Frontier Exploration**，以及多 IoT 设备 **TSP 路径优化**（nearest-neighbor + 2-opt）。
+经典移动机器人 **Occupancy Grid + Frontier Exploration**，以及多 IoT 设备 **TSP 路径优化**（nearest-neighbor + 2-opt）。
 
-**涉及文件**
 
-| 文件 | 说明 |
-|------|------|
-| `homemate/robot/occupancy.py` | `OccupancyGrid` — unknown/free/occupied、frontier 选取 |
-| `homemate/robot/route_optimizer.py` | `RouteOptimizer` — 多设备 dock 访问顺序优化 |
-| `homemate/robot/controller.py` | `explore_frontier()` / `plan_device_route()` / `execute_device_route()` |
-| `homemate/cognition/tools.py` | 新增 3 工具（共 14 个）：`plan_device_route` / `visit_devices` / `explore_frontier` |
-| `homemate/main.py` | 已探索区域淡绿色 overlay |
-| `homemate/robot/__main__.py` | benchmark 增加 costmap 对比 + 多设备 route |
-| `tests/test_occupancy.py` | 4 项占据栅格测试 |
-| `tests/test_route_optimizer.py` | 3 项路径优化测试 |
-
-**新工具用法**
 ```powershell
 # 规划多设备最优访问顺序（不移动）
 # tool: plan_device_route(device_ids=["coffee.kitchen","lamp.bedroom"])
@@ -271,23 +204,8 @@ python -m homemate.robot
 
 **find_owner 增强**：belief sweep + coverage scan 失败后，自动尝试 **frontier_explore**（最多 2 hop）。
 
-### 验证结果（第五+六批后）
-- **98 tests passed**
-- **eval 20/20**（109/109 criteria）
-- **demo_runner 4/4**
 
----
 
-## 待办 / 下一批（规划）
-
-- [x] 动态重规划：主人走动时触发路径重算
-- [x] 代价地图 / 转向惩罚 A*（`planning/costmap.py`）
-- [x] 占据栅格 + frontier 探索
-- [x] 多设备 TSP 路径优化
-- [ ] `--script` 链式自动播放
-- [ ] Replay 面板点击 session 条目直接加载
-
----
 
 ## 快速演示命令
 
