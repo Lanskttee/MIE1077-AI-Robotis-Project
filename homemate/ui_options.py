@@ -28,6 +28,7 @@ class MainOptions:
     record_session: bool = True
     replay_session: str | None = None
     session_title: str | None = None
+    replan_demo: bool = False
 
 
 def parse_main_args(argv: list[str] | None = None) -> MainOptions:
@@ -84,6 +85,11 @@ def parse_main_args(argv: list[str] | None = None) -> MainOptions:
         help="Restore robot/owner/IoT state from a JSON snapshot on startup.",
     )
     p.add_argument(
+        "--replan-demo", action="store_true",
+        help="Mock LLM/emotion, owner CAN wander, auto-send coffee request "
+             "(for testing dynamic replanning — do NOT use --offline).",
+    )
+    p.add_argument(
         "--list-scripts", action="store_true",
         help="Print available demo scripts and exit.",
     )
@@ -125,6 +131,21 @@ def parse_main_args(argv: list[str] | None = None) -> MainOptions:
         raise SystemExit(0)
 
     offline = args.offline
+    if args.replan_demo:
+        return MainOptions(
+            seed=7,
+            owner_room="bedroom",
+            emotion="tired",
+            mock_llm=True,
+            mock_emotion=True,
+            freeze_owner=False,
+            auto_run=True,
+            auto_message="I'm tired. Brew some coffee.",
+            record_session=not args.no_record,
+            replay_session=args.replay_session,
+            session_title=args.session_title or "Replan demo",
+            replan_demo=True,
+        )
     opts = MainOptions(
         seed=args.seed,
         owner_room=args.owner_room,

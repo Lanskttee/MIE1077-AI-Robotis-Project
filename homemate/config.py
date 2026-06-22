@@ -17,7 +17,7 @@ TILE_PX = 32                       # pixels per grid tile
 GRID_COLS = 24                     # apartment width  (tiles)
 GRID_ROWS = 16                     # apartment height (tiles)
 SIDEBAR_PX = 360                   # right-hand dialogue / state panel
-INFOBAR_PX = 40                    # top status strip
+INFOBAR_PX = 52                    # top status strip (two lines)
 
 WINDOW_W = GRID_COLS * TILE_PX + SIDEBAR_PX
 WINDOW_H = GRID_ROWS * TILE_PX + INFOBAR_PX

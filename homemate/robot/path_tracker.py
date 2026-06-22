@@ -37,10 +37,14 @@ class PathTracker:
         self.active = None
         self.follow_owner = False
 
-    def enable_owner_tracking(self) -> None:
+    def enable_owner_tracking(self, *, owner_pos: Coord | None = None) -> None:
         self.follow_owner = True
-        if self.last_owner_pos is not None:
-            self.register(self.last_owner_pos, kind="owner", label="follow_owner")
+        if self.last_owner_pos is None and owner_pos is not None:
+            self.last_owner_pos = owner_pos
+        if self.active is None or self.active.kind == "owner":
+            pos = self.last_owner_pos
+            if pos is not None:
+                self.register(pos, kind="owner", label="follow_owner")
 
     def observe_owner(self, owner_pos: Coord) -> str | None:
         """Return replan reason if owner moved while tracking."""
@@ -49,11 +53,13 @@ class PathTracker:
             return None
         if self.last_owner_pos is None:
             self.last_owner_pos = owner_pos
-            self.register(owner_pos, kind="owner", label="follow_owner")
+            if self.active is None or self.active.kind == "owner":
+                self.register(owner_pos, kind="owner", label="follow_owner")
             return None
         if owner_pos != self.last_owner_pos:
             self.last_owner_pos = owner_pos
-            self.register(owner_pos, kind="owner", label="follow_owner")
+            if self.active is None or self.active.kind == "owner":
+                self.register(owner_pos, kind="owner", label="follow_owner")
             return "owner_moved"
         return None
 
