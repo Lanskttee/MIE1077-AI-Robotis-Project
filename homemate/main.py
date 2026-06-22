@@ -8,6 +8,7 @@ Run with::
 
 Key bindings:
     Enter   open the input field; type a request, press Enter to send
+    F2      send preset coffee request (IME-friendly shortcut)
     1..6    inject mock emotion (happy / sad / angry / surprised / neutral / tired)
     Tab     cycle sidebar panel (Dialogue / Actions / Memory / Devices)
     d/a/m/i jump to Dialogue / Actions / Memory / Devices panel
@@ -59,6 +60,8 @@ from .world.iot import IoTNetwork  # noqa: E402
 
 SIDEBAR_PANELS = ("dialogue", "trace", "memory", "devices", "replay")
 AUTO_RUN_DELAY_FRAMES = 45
+REPLAN_DEMO_AUTO_RUN_FRAMES = 30
+REPLAN_DEMO_PRESET_MESSAGE = "I'm tired. Brew some coffee."
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +75,9 @@ class App:
         pygame.init()
         agent_tag = "MockLLM" if self.opts.mock_llm else "Agent"
         caption = f"HomeMate — {agent_tag} demo"
-        if self.opts.script:
+        if self.opts.replan_demo:
+            caption += " [Replan demo — F2 or wait 1s]"
+        elif self.opts.script:
             caption += f" [{self.opts.script}]"
         pygame.display.set_caption(caption)
         self.screen = pygame.display.set_mode((config.WINDOW_W, config.WINDOW_H))
@@ -107,6 +112,9 @@ class App:
         self.last_tool_trace: list[dict[str, Any]] = []
         self.sidebar_panel = "dialogue"
         self.dialogue_scroll = 0
+        self._auto_run_message: str | None = self.opts.auto_message
+        self._auto_run_frames = 0
+        self._anim_start_pos: tuple[int, int] = (0, 0)
         self.status_msg = self._startup_status()
 
         self._anim_accumulator = 0
@@ -117,10 +125,7 @@ class App:
         self._owner_step_accum = 0
         self._owner_idle_frames = 0
         self.OWNER_STEP_FRAMES = config.ROBOT_STEP_FRAMES * 2
-        self.OWNER_IDLE_FRAMES = config.FPS * 6
-
-        self._auto_run_message: str | None = self.opts.auto_message
-        self._auto_run_frames = 0
+        self.OWNER_IDLE_FRAMES = config.FPS * (2 if self.opts.replan_demo else 6)
 
         self.reset_scenario(initial=True)
         if self.opts.load_snapshot:
@@ -143,9 +148,32 @@ class App:
                     "owner_room": self.opts.owner_room,
                     "emotion": self.opts.emotion,
                     "mock_llm": self.opts.mock_llm,
+                    "replan_demo": self.opts.replan_demo,
                 },
             )
-            self.status_msg = f"Recording session: {self.session_store.active.session_id}"
+            self._refresh_status_msg(recording=self.session_store.active.session_id)
+
+    def _refresh_status_msg(self, *, recording: str | None = None) -> None:
+        """Rebuild the grey hint line shown under the main top-bar stats."""
+        if self.opts.replan_demo:
+            if self._auto_run_message:
+                delay = self._auto_run_delay()
+                sec = max(0.0, (delay - self._auto_run_frames) / config.FPS)
+                self.status_msg = f"Replan demo: auto-send in {sec:.1f}s  (or press F2 now)"
+            elif self.agent_busy:
+                self.status_msg = "Agent working..."
+            else:
+                self.status_msg = "Replan demo: press F2 to re-run  |  owner wanders"
+        elif recording:
+            self.status_msg = f"Recording session {recording[:32]}"
+        else:
+            self.status_msg = "Press Enter to ask  |  Tab: sidebar panels"
+        if self.opts.freeze_owner and not self.opts.replan_demo:
+            self.status_msg += "  |  Owner frozen"
+
+    def _auto_run_delay(self) -> int:
+        return (REPLAN_DEMO_AUTO_RUN_FRAMES if self.opts.replan_demo
+                else AUTO_RUN_DELAY_FRAMES)
 
     # ---- setup ----
 
@@ -171,17 +199,12 @@ class App:
             return MockEmotionDetector()
 
     def _startup_status(self) -> str:
-        parts = ["Press Enter to ask. Tab: sidebar panels."]
-        if isinstance(self.emotion, MockEmotionDetector):
-            if self.opts.emotion:
-                parts.append(f"Mock emotion preset: {self.opts.emotion}.")
-            else:
-                parts.append("Press 1..6 to inject mock emotion first.")
-        if self.opts.freeze_owner:
-            parts.append("Owner frozen.")
-        if self._auto_run_message:
-            parts.append(f"Auto-run pending: {self._auto_run_message[:40]}...")
-        return "  ".join(parts)
+        self._refresh_status_msg()
+        if isinstance(self.emotion, MockEmotionDetector) and not self.opts.replan_demo:
+            extra = (f"Mock emotion: {self.opts.emotion}."
+                     if self.opts.emotion else "Press 1..6 for mock emotion.")
+            self.status_msg += f"  {extra}"
+        return self.status_msg
 
     def reset_scenario(self, *, initial: bool = False) -> None:
         place_in_room(self.robot, self.apt, "living_room", self.rng)
@@ -210,6 +233,8 @@ class App:
             for ev in pygame.event.get():
                 if ev.type == pygame.QUIT:
                     running = False
+                elif ev.type == pygame.TEXTINPUT and self.input_active:
+                    self.input_text += ev.text
                 elif ev.type == pygame.KEYDOWN:
                     running = self._handle_key(ev)
 
@@ -222,23 +247,38 @@ class App:
         self.emotion.stop()
         pygame.quit()
 
+    def _open_input(self) -> None:
+        self.input_active = True
+        try:
+            pygame.key.start_text_input()
+        except AttributeError:
+            pass
+
+    def _close_input(self) -> None:
+        self.input_active = False
+        try:
+            pygame.key.stop_text_input()
+        except AttributeError:
+            pass
+
+    def _append_input_char(self, ch: str) -> None:
+        if ch and ch.isprintable() and ch != "\x7f":
+            self.input_text += ch
+
     def _handle_key(self, ev) -> bool:
         if self.input_active:
             if ev.key == pygame.K_RETURN:
                 msg = self.input_text.strip()
                 self.input_text = ""
-                self.input_active = False
+                self._close_input()
                 if msg:
                     self._run_agent_async(msg)
             elif ev.key == pygame.K_ESCAPE:
                 self.input_text = ""
-                self.input_active = False
+                self._close_input()
             elif ev.key == pygame.K_BACKSPACE:
                 self.input_text = self.input_text[:-1]
-            else:
-                ch = ev.unicode
-                if ch and ch.isprintable():
-                    self.input_text += ch
+            # Printable text comes from pygame.TEXTINPUT only (avoid double chars).
             return True
 
         if ev.key == pygame.K_ESCAPE:
@@ -247,7 +287,10 @@ class App:
             if self.replay_mode:
                 self.status_msg = "Replay mode — press p to exit before sending new requests."
                 return True
-            self.input_active = True
+            self._open_input()
+            return True
+        if ev.key == pygame.K_F2:
+            self._run_agent_async(REPLAN_DEMO_PRESET_MESSAGE)
             return True
         if ev.key == pygame.K_r:
             self.reset_scenario()
@@ -328,6 +371,38 @@ class App:
 
     # ---- per-frame update ----
 
+    def _replan_count(self) -> int:
+        ctrl = self.skills.robot_ctrl
+        return max(ctrl.metrics.replan_count, ctrl.tracker.replan_count)
+
+    def _sync_animation_status(self, *, replan_res: dict[str, Any] | None = None) -> None:
+        """Keep the grey status line in sync with live replan count + path length."""
+        pending = self.skills.pending_path
+        rc = self._replan_count()
+        if replan_res and replan_res.get("replanned"):
+            self.status_msg = (
+                f"Replan ({replan_res.get('reason')}): {replan_res.get('tile_steps')} new tiles  "
+                f"| {len(pending)} remaining  | R={rc}"
+            )
+        elif pending:
+            self.status_msg = f"Animating path: {len(pending)} tiles left  | R={rc}"
+        elif rc > 0:
+            self.status_msg = f"Path complete  |  total replans R={rc}"
+
+    def _status_line_for_topbar(self, *, busy: str) -> str:
+        """Build the grey second line; derive live values while path animates."""
+        pending = self.skills.pending_path
+        if pending:
+            rc = self._replan_count()
+            ctrl = self.skills.robot_ctrl
+            recent = ctrl.tracker.history[-1] if ctrl.tracker.history else None
+            reason = recent.get("reason") if recent else None
+            line = f"Animating {len(pending)} tiles left  |  R={rc}"
+            if reason:
+                line += f"  |  last: {reason}"
+            return line + busy
+        return f"{self.status_msg}{busy}"
+
     def _tick(self, dt: float) -> None:
         self._anim_accumulator += 1
         if self._anim_accumulator >= config.ROBOT_STEP_FRAMES and self.skills.pending_path:
@@ -336,10 +411,11 @@ class App:
             self.skills.robot_ctrl.update_map()
             res = self.skills.replan_if_needed(teleport=False)
             if res and res.get("replanned"):
-                self.status_msg = (
-                    f"Replan ({res.get('reason')}): "
-                    f"{res.get('tile_steps')} tiles, planner={res.get('planner')}"
-                )
+                self._sync_animation_status(replan_res=res)
+            elif self.skills.pending_path:
+                self._sync_animation_status()
+            elif not self.skills.pending_path and self._replan_count() > 0:
+                self._sync_animation_status()
         if not self.opts.freeze_owner:
             self._tick_owner()
         self.iot.tick(dt)
@@ -348,7 +424,10 @@ class App:
         if not self._auto_run_message or self.agent_busy:
             return
         self._auto_run_frames += 1
-        if self._auto_run_frames >= AUTO_RUN_DELAY_FRAMES:
+        delay = self._auto_run_delay()
+        if self.opts.replan_demo and self._auto_run_message and self._auto_run_frames % 5 == 0:
+            self._refresh_status_msg()
+        if self._auto_run_frames >= delay:
             msg = self._auto_run_message
             self._auto_run_message = None
             self._run_agent_async(msg)
@@ -446,7 +525,11 @@ class App:
                 if self.apt.room_name_at(*self.owner.pos) != self.apt.room_name_at(*self.robot.pos):
                     self.skills.owner_found = False
                 if self.skills.pending_path:
-                    self.skills.replan_if_needed(teleport=False)
+                    res = self.skills.replan_if_needed(teleport=False)
+                    if res and res.get("replanned"):
+                        self._sync_animation_status(replan_res=res)
+                    else:
+                        self._sync_animation_status()
             return
         self._owner_idle_frames += 1
         if self._owner_idle_frames >= self.OWNER_IDLE_FRAMES:
@@ -481,6 +564,7 @@ class App:
             self.status_msg = "Agent is still working on the previous request."
             return
         world_before = self._capture_snapshot_payload()
+        self._anim_start_pos = self.robot.pos
         self.agent_busy = True
         agent_name = "MockLLM" if isinstance(self.agent, MockLLM) else "Agent"
         self.status_msg = f"Sending to {agent_name}: {message[:60]}"
@@ -503,6 +587,7 @@ class App:
                     self.skills.dialogue.append(
                         ("system", f"{n_fail} tool step(s) failed — open Actions panel (a)."))
                 self.sidebar_panel = "trace"
+                self._prepare_path_animation()
                 self._record_turn(message, world_before, res)
             except Exception as e:
                 self.last_tool_trace = []
@@ -513,6 +598,25 @@ class App:
                 self.agent_busy = False
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _prepare_path_animation(self) -> None:
+        """Rewind robot to trip start so Pygame can animate ``pending_path``."""
+        pending = self.skills.pending_path
+        if not pending:
+            if self.opts.replan_demo:
+                self.status_msg = "Done (no path to animate)."
+            return
+        self.robot.x, self.robot.y = self._anim_start_pos
+        n = len(pending)
+        if self.opts.replan_demo:
+            self.owner.x, self.owner.y = pending[0]
+            res = self.skills.replan_if_needed(teleport=False)
+            self._sync_animation_status(replan_res=res if res and res.get("replanned") else None)
+            if not res or not res.get("replanned"):
+                err = (res or {}).get("error", "no trigger")
+                self.status_msg = f"Replan skipped ({err})  |  {n} tiles  |  R={self._replan_count()}"
+        else:
+            self.status_msg = f"Animating path ({n} tiles) — blue dots = route."
 
     def _record_turn(self, message: str, world_before: dict[str, Any],
                      res: TurnResult) -> None:
@@ -536,7 +640,8 @@ class App:
         )
         self.session_store.append_turn(turn)
         self.replay = ReplayController(self.session_store.active)
-        self.status_msg += f"  [saved turn {len(self.session_store.active.turns)}]"
+        if not self.opts.replan_demo:
+            self.status_msg += f"  [saved turn {len(self.session_store.active.turns)}]"
 
     # ---- rendering ----
 
@@ -724,13 +829,16 @@ class App:
         replay = "  [REPLAY]" if self.replay_mode else ""
         tel = self.skills.robot_ctrl.telemetry()
         mode = tel.get("mode", "idle")
-        tiles = tel.get("motion", {}).get("total_tiles_traveled", 0)
-        line = (f"{agent_tag}{replay}  |  robot: {robot_r} ({mode}, {tiles}t)  "
-                f"owner: {owner_r}  |  {em}  |  "
-                f"{self.status_msg}{busy}")
-        if len(line) > 120:
-            line = line[:117] + "..."
-        self.screen.blit(self.font_md.render(line, True, config.PALETTE.text), (10, 10))
+        motion = tel.get("motion", {})
+        tiles = motion.get("total_tiles_traveled", 0)
+        replans = self._replan_count()
+        line = (f"{agent_tag}{replay}  |  robot: {robot_r} ({mode}, {tiles}t, R{replans})  "
+                f"owner: {owner_r}  |  {em}")
+        status = self._status_line_for_topbar(busy=busy)
+        self.screen.blit(self.font_md.render(line, True, config.PALETTE.text), (10, 6))
+        if status:
+            self.screen.blit(self.font_sm.render(status[:160], True, config.PALETTE.text_dim),
+                             (10, 28))
 
     def _sidebar_rect(self) -> tuple[int, int, int, int]:
         x0 = config.GRID_COLS * config.TILE_PX
@@ -945,8 +1053,15 @@ class App:
         y = config.WINDOW_H - box_h - 60
         pygame.draw.rect(self.screen, (40, 42, 50), (x, y, box_w, box_h), border_radius=6)
         pygame.draw.rect(self.screen, config.PALETTE.accent, (x, y, box_w, box_h), 2, border_radius=6)
+        hint = "Enter=send  Esc=cancel  F2=preset coffee request"
+        self.screen.blit(self.font_sm.render(hint, True, config.PALETTE.text_dim),
+                         (x + 12, y + 6))
         self.screen.blit(self.font_md.render("> " + self.input_text + "|", True,
-                                              config.PALETTE.text), (x + 12, y + 16))
+                                              config.PALETTE.text), (x + 12, y + 28))
+        try:
+            pygame.key.set_text_input_rect(pygame.Rect(x + 12, y + 28, box_w - 24, 24))
+        except AttributeError:
+            pass
 
     @staticmethod
     def _wrap(text: str, max_chars: int) -> list[str]:
@@ -971,6 +1086,12 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["HOMEMATE_USE_MOCK_LLM"] = "1"
     if opts.mock_emotion:
         os.environ["HOMEMATE_USE_MOCK_EMOTION"] = "1"
+    if opts.replan_demo:
+        print("[HomeMate] Replan demo mode.")
+        print("  Window title should contain [Replan demo].")
+        print("  Auto-send in ~1s, or click the window and press F2.")
+        if not opts.auto_message:
+            print("  [warning] auto_message missing — check homemate/ui_options.py")
     App(opts).run()
     return 0
 

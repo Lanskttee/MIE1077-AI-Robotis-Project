@@ -25,6 +25,15 @@ def test_emotion_injection_flag() -> None:
     assert opts.emotion == "tired"
 
 
+def test_replan_demo_flag() -> None:
+    opts = parse_main_args(["--replan-demo"])
+    assert opts.replan_demo is True
+    assert opts.mock_llm is True
+    assert opts.freeze_owner is False
+    assert opts.auto_run is True
+    assert opts.auto_message is not None
+
+
 def test_tool_step_formatting() -> None:
     from homemate.ui_trace import format_tool_step
 

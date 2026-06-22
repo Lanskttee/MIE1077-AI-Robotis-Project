@@ -150,9 +150,12 @@ class RobotController:
         if self.tracker.active is None:
             return {"ok": False, "error": "no active goal"}
         goal = self.tracker.active.goal
-        if self.tracker.follow_owner:
-            goal = self.owner.pos
-            self.tracker.register(goal, kind="owner", label="follow_owner")
+        if self.tracker.follow_owner and reason == "owner_moved":
+            # Keep device / room goals fixed; only chase the owner tile when that
+            # *is* the navigation target (find_owner follow mode).
+            if self.tracker.active.kind == "owner":
+                goal = self.owner.pos
+                self.tracker.register(goal, kind="owner", label="follow_owner")
         plan = self.plan_to(goal)
         if not plan.path:
             return {"ok": False, "error": "replan failed", "reason": reason}
@@ -205,7 +208,7 @@ class RobotController:
             self.belief.observe(room, visible)
             if visible:
                 owner_found = True
-                self.tracker.enable_owner_tracking()
+                self.tracker.enable_owner_tracking(owner_pos=self.owner.pos)
                 break
         self.metrics.record_scan(tiles_visited)
         self.mode = "idle"
@@ -246,7 +249,7 @@ class RobotController:
                 room = self.owner_room()
                 if room:
                     self.belief.observe(room, True)
-                self.tracker.enable_owner_tracking()
+                self.tracker.enable_owner_tracking(owner_pos=self.owner.pos)
                 break
         self.mode = "idle"
         return {
@@ -266,7 +269,7 @@ class RobotController:
             room = self.owner_room()
             if room:
                 self.belief.observe(room, True)
-            self.tracker.enable_owner_tracking()
+            self.tracker.enable_owner_tracking(owner_pos=self.owner.pos)
             self.mode = "idle"
             return {"ok": True, "owner_room": room, "method": "already_here",
                     "belief": self.belief.snapshot()}
@@ -279,7 +282,7 @@ class RobotController:
             visible = owner_check()
             self.belief.observe(room, visible)
             if visible:
-                self.tracker.enable_owner_tracking()
+                self.tracker.enable_owner_tracking(owner_pos=self.owner.pos)
                 self.mode = "idle"
                 return {"ok": True, "owner_room": room, "method": "belief_sweep",
                         "rooms_checked": rooms.index(room) + 1,
