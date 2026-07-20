@@ -339,4 +339,9 @@ def make_agent(skills: Skills,
                memory: MemoryStore | None = None) -> "LLMAgent | MockLLM":
     if USE_MOCK_LLM:
         return MockLLM(skills, memory=memory)
+    from ..config import ANTHROPIC_API_KEY, OPENAI_API_KEY
+    if OPENAI_API_KEY and not ANTHROPIC_API_KEY:
+        from .openai_agent import OpenAIAgent
+        model = os.environ.get("HOMEMATE_OPENAI_MODEL", "gpt-4o-mini")
+        return OpenAIAgent(skills, model=model, api_key=OPENAI_API_KEY, memory=memory)
     return LLMAgent.from_env(skills, memory=memory)

@@ -864,7 +864,10 @@ class App:
         reading = self.emotion.poll()
         robot_r = (self.skills.robot_room() or "?").replace("_", " ")
         owner_r = (self.skills.owner_room() or "?").replace("_", " ")
-        agent_tag = "MockLLM" if isinstance(self.agent, MockLLM) else "Claude"
+        if isinstance(self.agent, MockLLM):
+            agent_tag = "MockLLM"
+        else:
+            agent_tag = getattr(self.agent, "model", "LLM")
         busy = "  [thinking...]" if self.agent_busy else ""
 
         # Line 1: robot location + owner location + emotion
