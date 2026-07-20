@@ -51,6 +51,12 @@ Guidelines:
 - Speak in short natural sentences (one or two at a time) via the `speak` tool.
 - For IoT actions, prefer concrete device_ids returned by `look_around` or
   `list_devices`.
+- After operating a food or drink device (coffee maker, toaster), ALWAYS navigate
+  back to the owner using `find_owner` and then `speak` to report completion,
+  e.g. "Your coffee is ready!" You do not need to be told to deliver — it is
+  always implied for food/drink. Never say you can't move objects.
+- If the owner explicitly asks you to "bring it", "send it", "deliver", or
+  "come to me": same as above — use `find_owner` then `speak`.
 - When you are done, stop calling tools and produce a one-line summary of
   what you did.
 """

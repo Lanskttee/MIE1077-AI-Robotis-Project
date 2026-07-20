@@ -31,6 +31,9 @@ ROOMS = ("living_room", "kitchen", "bedroom", "bathroom")
 # Free-text keyword -> IoT device kind. One source of truth for keyword routing.
 DELIVERY_KEYWORDS = {"bring", "deliver", "send", "come to me", "come here", "find me"}
 
+# Devices whose completion naturally implies the robot should return to the owner.
+DELIVER_AFTER_KINDS = {"coffee_maker", "toaster"}
+
 KIND_KEYWORDS: dict[str, str] = {
     "curtain":     "curtain",
     "lamp":        "lamp",
@@ -147,6 +150,7 @@ class ReActPlanner:
         #    is reproducible; deduplicate by device kind so "brew coffee" does
         #    not fire twice.
         kinds_seen: set[str] = set()
+        needs_delivery = any(kw in msg for kw in DELIVERY_KEYWORDS)
         for kw, kind in KIND_KEYWORDS.items():
             if kw not in msg or kind in kinds_seen:
                 continue
@@ -167,16 +171,24 @@ class ReActPlanner:
                 args={"device_id": target.device_id, "action": action, "kwargs": kwargs},
                 rationale=f"Carry out the '{kw}' request on {target.device_id}.",
             ))
+            # Food/drink devices always imply delivery back to the owner.
+            if kind in DELIVER_AFTER_KINDS:
+                needs_delivery = True
 
-        # Delivery / come-to-me: after completing tasks, navigate back to the owner.
-        if any(kw in msg for kw in DELIVERY_KEYWORDS):
+        # Navigate back to owner after food/drink tasks or explicit delivery request.
+        if needs_delivery:
             plan.steps.append(PlanStep(
                 kind="find_owner",
                 rationale="Deliver result to owner / come to where the owner is.",
             ))
+            device_names = {"coffee_maker": "coffee", "toaster": "toast"}
+            delivered = next(
+                (device_names[k] for k in kinds_seen if k in device_names), None
+            )
+            delivery_text = f"Your {delivered} is ready!" if delivered else "Here you go!"
             plan.steps.append(PlanStep(
                 kind="speak",
-                args={"intent": "task", "text": "Here you go!"},
+                args={"intent": "task", "text": delivery_text},
                 rationale="Confirm delivery to owner.",
             ))
 
