@@ -95,6 +95,23 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "clean_room",
+        "description": "Systematically clean/tidy a room by performing a full "
+                       "boustrophedon sweep. Use when the owner asks to clean, "
+                       "tidy, vacuum, or sweep a room.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "room": {
+                    "type": "string",
+                    "enum": ["living_room", "kitchen", "bedroom", "bathroom"],
+                    "description": "Which room to clean.",
+                },
+            },
+            "required": ["room"],
+        },
+    },
+    {
         "name": "get_robot_state",
         "description": "Return the robot pose, navigation mode, motion odometry, "
                        "occupancy map stats, path tracker, and probabilistic "
@@ -214,6 +231,8 @@ def dispatch_tool(skills: Skills, name: str, tool_input: dict[str, Any]) -> dict
             return skills.list_devices()
         if name == "scan_room":
             return skills.scan_room(tool_input["room"])
+        if name == "clean_room":
+            return skills.clean_room(tool_input["room"])
         if name == "get_robot_state":
             return skills.get_robot_state()
         if name == "plan_device_route":

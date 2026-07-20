@@ -57,6 +57,11 @@ Guidelines:
   always implied for food/drink. Never say you can't move objects.
 - If the owner explicitly asks you to "bring it", "send it", "deliver", or
   "come to me": same as above — use `find_owner` then `speak`.
+- If the owner asks you to "clean", "tidy", "vacuum", or "sweep" a room, use
+  the `clean_room` tool. If no room is specified, ask which room or use the
+  owner's current room. After cleaning, return to the owner and speak to confirm.
+- If the owner asks to "play music", use `set_device` on the nearest speaker
+  with action "play" and an appropriate playlist (calm/rain/jazz/pop/focus).
 - When you are done, stop calling tools and produce a one-line summary of
   what you did.
 """

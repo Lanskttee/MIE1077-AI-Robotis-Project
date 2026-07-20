@@ -76,6 +76,20 @@ class Skills:
             self.owner_found = True
         return out
 
+    def clean_room(self, room: str) -> dict[str, Any]:
+        """Boustrophedon sweep of a room for cleaning/tidying purposes."""
+        out = self.robot_ctrl.scan_room(
+            room, self.pending_path, owner_check=self._owner_in_current_room,
+        )
+        if out.get("owner_found"):
+            self.owner_found = True
+        return {
+            "ok": out.get("ok", True),
+            "room": room,
+            "tiles_covered": out.get("tiles_scanned", 0),
+            "message": f"Cleaning sweep of {room} complete.",
+        }
+
     def explore_frontier(self, max_hops: int = 3) -> dict[str, Any]:
         out = self.robot_ctrl.explore_frontier(
             self.pending_path,

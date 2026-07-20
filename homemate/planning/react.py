@@ -34,6 +34,9 @@ DELIVERY_KEYWORDS = {"bring", "deliver", "send", "come to me", "come here", "fin
 # Devices whose completion naturally implies the robot should return to the owner.
 DELIVER_AFTER_KINDS = {"coffee_maker", "toaster"}
 
+# Keywords that trigger a clean_room action (not IoT devices, handled separately).
+CLEAN_KEYWORDS = {"clean", "tidy", "vacuum", "sweep", "mop"}
+
 KIND_KEYWORDS: dict[str, str] = {
     "curtain":     "curtain",
     "lamp":        "lamp",
@@ -192,6 +195,26 @@ class ReActPlanner:
                 rationale="Confirm delivery to owner.",
             ))
 
+        # 5. Cleaning actions — boustrophedon sweep of requested rooms.
+        if any(kw in msg for kw in CLEAN_KEYWORDS):
+            room_hits = [r for r in ROOMS if r in msg or r.split("_")[0] in msg]
+            rooms_to_clean = room_hits or [skills.robot_ctrl.observe_current_room().get("room", "living_room")]
+            for room in rooms_to_clean:
+                plan.steps.append(PlanStep(
+                    kind="clean_room",
+                    args={"room": room},
+                    rationale=f"Sweep {room} to clean it.",
+                ))
+            plan.steps.append(PlanStep(
+                kind="find_owner",
+                rationale="Return to owner after cleaning.",
+            ))
+            plan.steps.append(PlanStep(
+                kind="speak",
+                args={"intent": "task", "text": "All done! The room is clean."},
+                rationale="Confirm cleaning complete.",
+            ))
+
         return plan
 
     @staticmethod
@@ -341,4 +364,6 @@ class PlanExecutor:
             if kwargs:
                 inp["kwargs"] = kwargs
             return "set_device", inp
+        if step.kind == "clean_room":
+            return "clean_room", {"room": step.args["room"]}
         raise ValueError(f"unknown plan step kind: {step.kind!r}")

@@ -82,14 +82,23 @@ class App:
         elif self.opts.script:
             caption += f" [{self.opts.script}]"
         pygame.display.set_caption(caption)
-        flags = pygame.SCALED | pygame.RESIZABLE
+        flags = pygame.RESIZABLE
         if getattr(self.opts, "fullscreen", False):
             flags |= pygame.FULLSCREEN
-        self.screen = pygame.display.set_mode((config.WINDOW_W, config.WINDOW_H), flags)
+        self.display = pygame.display.set_mode((config.WINDOW_W, config.WINDOW_H), flags)
+        # Fixed-size internal canvas — all drawing targets this surface.
+        # The run loop smoothscales it to the actual window each frame.
+        self.screen = pygame.Surface((config.WINDOW_W, config.WINDOW_H))
         self.clock = pygame.time.Clock()
         self.font_sm = pygame.font.SysFont("consolas", 14)
         self.font_md = pygame.font.SysFont("consolas", 18)
         self.font_lg = pygame.font.SysFont("consolas", 22, bold=True)
+
+        # Music / ambient sound
+        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+        self._music_sounds: dict[str, pygame.mixer.Sound] = {}
+        self._music_channel: pygame.mixer.Channel | None = None
+        self._music_playlist: str | None = None
 
         self.rng = random.Random(self.opts.seed)
         self.apt = Apartment()
@@ -250,7 +259,11 @@ class App:
 
             self._tick(1.0 / config.FPS)
             self._tick_auto_run()
+            self._tick_music()
             self._draw()
+            win_w, win_h = self.display.get_size()
+            scaled = pygame.transform.smoothscale(self.screen, (win_w, win_h))
+            self.display.blit(scaled, (0, 0))
             pygame.display.flip()
             self.clock.tick(config.FPS)
 
@@ -570,6 +583,49 @@ class App:
             self._owner_idle_frames = 0
             self._plan_owner_trip()
 
+    # ---- music ----
+
+    _PLAYLIST_NOTES: dict[str, list[tuple[float, float]]] = {
+        "calm":  [(220.0, 0.6), (330.0, 0.3), (440.0, 0.1)],
+        "rain":  [(200.0, 0.5), (201.5, 0.3), (203.0, 0.2)],
+        "jazz":  [(440.0, 0.5), (550.0, 0.3), (660.0, 0.2)],
+        "pop":   [(440.0, 0.6), (880.0, 0.4)],
+        "focus": [(256.0, 0.8), (384.0, 0.2)],
+        "_default": [(330.0, 0.7), (440.0, 0.3)],
+    }
+
+    def _get_ambient_sound(self, playlist: str) -> pygame.mixer.Sound:
+        if playlist not in self._music_sounds:
+            import numpy as np
+            sr, dur = 44100, 3.0
+            t = np.linspace(0, dur, int(sr * dur), False)
+            notes = self._PLAYLIST_NOTES.get(playlist, self._PLAYLIST_NOTES["_default"])
+            wave = sum(np.sin(2 * np.pi * f * t) * a for f, a in notes)
+            wave = wave / max(abs(wave.max()), 1e-6) * 0.18
+            wave_i16 = (wave * 32767).astype(np.int16)
+            stereo = np.column_stack([wave_i16, wave_i16])
+            self._music_sounds[playlist] = pygame.sndarray.make_sound(stereo)
+        return self._music_sounds[playlist]
+
+    def _tick_music(self) -> None:
+        """Sync pygame.mixer with the current speaker device state."""
+        playing_device = next(
+            (d for d in self.iot.list() if d.kind == "speaker" and d.state.get("playing")),
+            None,
+        )
+        if playing_device is None:
+            if self._music_channel and self._music_channel.get_busy():
+                self._music_channel.stop()
+                self._music_playlist = None
+            return
+        playlist = playing_device.state.get("playlist", "_default") or "_default"
+        if playlist != self._music_playlist:
+            if self._music_channel:
+                self._music_channel.stop()
+            sound = self._get_ambient_sound(playlist)
+            self._music_channel = sound.play(loops=-1)
+            self._music_playlist = playlist
+
     def _plan_owner_trip(self) -> None:
         from .planning.navigator import astar
         current = self.apt.room_name_at(*self.owner.pos)
@@ -603,6 +659,7 @@ class App:
         agent_name = "MockLLM" if isinstance(self.agent, MockLLM) else "Agent"
         self.status_msg = f"Sending to {agent_name}: {message[:60]}"
         self.skills.dialogue.append(("you", message))
+        self.dialogue_scroll = 0  # scroll to bottom when user sends
 
         def worker() -> None:
             try:
@@ -617,9 +674,13 @@ class App:
                     + (f", {n_fail} failed" if n_fail else "")
                     + f"). {self.last_agent_summary[:50]}"
                 )
+                # Show LLM's final text in chat if it didn't speak via tool
+                if res.final_text and not res.spoken:
+                    self.skills.dialogue.append(("robot", res.final_text))
                 if n_fail:
                     self.skills.dialogue.append(
                         ("system", f"{n_fail} step(s) failed — press 'a' for details."))
+                self.dialogue_scroll = 0  # scroll to show latest robot reply
                 self.sidebar_panel = "dialogue"
                 self._prepare_path_animation()
                 self._record_turn(message, world_before, res)
@@ -690,22 +751,21 @@ class App:
     def _draw_world(self) -> None:
         T = config.TILE_PX
         offset_y = config.INFOBAR_PX
+        # Fill rooms with flat tint (no grid lines — cleaner look).
         for r in self.apt.rooms:
             tint = config.PALETTE.room_tint.get(r.name, config.PALETTE.floor)
             rect = pygame.Rect(r.x0 * T, r.y0 * T + offset_y,
                                (r.x1 - r.x0 + 1) * T, (r.y1 - r.y0 + 1) * T)
             pygame.draw.rect(self.screen, tint, rect)
-        for x in range(self.apt.cols + 1):
-            pygame.draw.line(self.screen, config.PALETTE.grid_line,
-                             (x * T, offset_y), (x * T, offset_y + self.apt.rows * T))
-        for y in range(self.apt.rows + 1):
-            pygame.draw.line(self.screen, config.PALETTE.grid_line,
-                             (0, offset_y + y * T), (self.apt.cols * T, offset_y + y * T))
+            # Crisp room border instead of per-tile grid lines.
+            pygame.draw.rect(self.screen, (70, 72, 85), rect, 2)
+        # Draw walls as thick dark strips (skip door tiles).
         for (x, y) in self.apt.walls():
             if self.apt.is_door(x, y):
                 continue
             rect = pygame.Rect(x * T, y * T + offset_y, T, T)
             pygame.draw.rect(self.screen, config.PALETTE.wall, rect)
+        # Draw door openings as narrow coloured bars.
         for (x, y) in self.apt.doors():
             rect = pygame.Rect(x * T + T // 4, y * T + offset_y + T // 4, T // 2, T // 2)
             pygame.draw.rect(self.screen, config.PALETTE.door, rect, border_radius=4)
