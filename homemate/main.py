@@ -392,8 +392,11 @@ class App:
             def transcribe() -> None:
                 text = self.stt.stop_and_transcribe()
                 if text:
+                    # Add [voice] entry directly; pass skip_dialogue=True so
+                    # _run_agent_async does not add a second entry.
                     self.skills.dialogue.append(("you", f"[voice] {text}"))
-                    self._run_agent_async(text)
+                    self.dialogue_scroll = 0
+                    self._run_agent_async(text, skip_dialogue=True)
                 else:
                     self.status_msg = "Voice input: nothing heard."
             threading.Thread(target=transcribe, daemon=True).start()
@@ -646,7 +649,7 @@ class App:
 
     # ---- agent ----
 
-    def _run_agent_async(self, message: str) -> None:
+    def _run_agent_async(self, message: str, skip_dialogue: bool = False) -> None:
         if self.replay_mode:
             self.status_msg = "Exit replay mode (p) before sending a new request."
             return
@@ -658,7 +661,8 @@ class App:
         self.agent_busy = True
         agent_name = "MockLLM" if isinstance(self.agent, MockLLM) else "Agent"
         self.status_msg = f"Sending to {agent_name}: {message[:60]}"
-        self.skills.dialogue.append(("you", message))
+        if not skip_dialogue:
+            self.skills.dialogue.append(("you", message))
         self.dialogue_scroll = 0  # scroll to bottom when user sends
 
         def worker() -> None:

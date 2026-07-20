@@ -150,12 +150,8 @@ class Skills:
             return {"ok": False, "error": f"unknown device {device_id}"}
         reach = self.robot_ctrl.check_device_reach(dev)
         if not reach.get("ok"):
-            return {
-                "ok": False,
-                "error": "robot out of device interaction range",
-                "reach": reach,
-                "hint": f"call navigate_to_device({device_id!r}) first",
-            }
+            # Auto-navigate to the device instead of failing.
+            self.robot_ctrl.navigate_to_device(dev, self.pending_path)
         result = self.iot.act(device_id, action, **kwargs)
         if result.get("ok"):
             self.robot_ctrl.mode = "actuating"
