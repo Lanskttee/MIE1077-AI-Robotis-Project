@@ -29,6 +29,8 @@ from ..action.skills import Skills
 ROOMS = ("living_room", "kitchen", "bedroom", "bathroom")
 
 # Free-text keyword -> IoT device kind. One source of truth for keyword routing.
+DELIVERY_KEYWORDS = {"bring", "deliver", "send", "come to me", "come here", "find me"}
+
 KIND_KEYWORDS: dict[str, str] = {
     "curtain":     "curtain",
     "lamp":        "lamp",
@@ -134,6 +136,7 @@ class ReActPlanner:
         ))
 
         # 3. Empathetic opener tuned to the detected emotion at execution time.
+        # The executor will skip this if emotion is neutral and device tasks follow.
         plan.steps.append(PlanStep(
             kind="speak",
             args={"intent": "empathy"},
@@ -163,6 +166,18 @@ class ReActPlanner:
                 kind="actuate",
                 args={"device_id": target.device_id, "action": action, "kwargs": kwargs},
                 rationale=f"Carry out the '{kw}' request on {target.device_id}.",
+            ))
+
+        # Delivery / come-to-me: after completing tasks, navigate back to the owner.
+        if any(kw in msg for kw in DELIVERY_KEYWORDS):
+            plan.steps.append(PlanStep(
+                kind="find_owner",
+                rationale="Deliver result to owner / come to where the owner is.",
+            ))
+            plan.steps.append(PlanStep(
+                kind="speak",
+                args={"intent": "task", "text": "Here you go!"},
+                rationale="Confirm delivery to owner.",
             ))
 
         return plan
@@ -268,8 +283,14 @@ class PlanExecutor:
         # Local import: avoids a cognition <-> planning cycle.
         from ..cognition.tools import dispatch_tool
         result = ExecutionResult()
-        for step in plan.steps:
+        for i, step in enumerate(plan.steps):
             name, inp = self._step_to_call(step, result.detected_emotion)
+            # When emotion is neutral and device tasks follow, replace the generic
+            # "Just checking in" opener with a brief task acknowledgment.
+            if (name == "speak" and result.detected_emotion == "neutral"
+                    and any(s.kind == "actuate" for s in plan.steps[i + 1:])
+                    and inp.get("text", "").lower().startswith("hey, just")):
+                inp = {"text": "Got it, I'll take care of that."}
             out = dispatch_tool(self.skills, name, inp)
             result.tool_trace.append({"name": name, "input": inp, "output": out})
             if name == "read_emotion" and out.get("ok"):

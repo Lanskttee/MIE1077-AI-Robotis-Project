@@ -56,6 +56,8 @@ from .world_snapshot import capture_world, load_snapshot, restore_world, save_sn
 from .world.apartment import Apartment  # noqa: E402
 from .world.entities import Owner, Robot, place_in_room, random_room  # noqa: E402
 from .world.iot import IoTNetwork  # noqa: E402
+from .tts import TTSEngine  # noqa: E402
+from .stt import STTEngine  # noqa: E402
 
 
 SIDEBAR_PANELS = ("dialogue", "trace", "memory", "devices", "replay")
@@ -80,7 +82,10 @@ class App:
         elif self.opts.script:
             caption += f" [{self.opts.script}]"
         pygame.display.set_caption(caption)
-        self.screen = pygame.display.set_mode((config.WINDOW_W, config.WINDOW_H))
+        flags = pygame.SCALED | pygame.RESIZABLE
+        if getattr(self.opts, "fullscreen", False):
+            flags |= pygame.FULLSCREEN
+        self.screen = pygame.display.set_mode((config.WINDOW_W, config.WINDOW_H), flags)
         self.clock = pygame.time.Clock()
         self.font_sm = pygame.font.SysFont("consolas", 14)
         self.font_md = pygame.font.SysFont("consolas", 18)
@@ -97,7 +102,12 @@ class App:
         if self.opts.emotion and isinstance(self.emotion, MockEmotionDetector):
             self.emotion.inject(self.opts.emotion)
 
-        self.skills = Skills(self.apt, self.robot, self.owner, self.iot, self.emotion)
+        self.tts = TTSEngine(api_key=config.OPENAI_API_KEY, voice=config.TTS_VOICE)
+        self.stt = STTEngine(api_key=config.OPENAI_API_KEY)
+        self._stt_recording = False
+
+        self.skills = Skills(self.apt, self.robot, self.owner, self.iot, self.emotion,
+                             tts=self.tts.speak)
         self.memory = MemoryStore()
         self.session_store = SessionStore()
         self.replay: ReplayController | None = None
@@ -338,6 +348,9 @@ class App:
             self.status_msg = "Long-term memory cleared."
             self.sidebar_panel = "memory"
             return True
+        if ev.key == pygame.K_s:
+            self._toggle_stt()
+            return True
         if ev.key == pygame.K_PAGEUP:
             self.dialogue_scroll = max(0, self.dialogue_scroll - 3)
             return True
@@ -350,6 +363,27 @@ class App:
             self.emotion.inject(digits[ev.key])
             self.status_msg = f"Injected mock emotion: {digits[ev.key]}"
         return True
+
+    def _toggle_stt(self) -> None:
+        if not self.stt.available:
+            self.status_msg = "Voice input unavailable — set OPENAI_API_KEY and install sounddevice."
+            return
+        if not self._stt_recording:
+            self._stt_recording = True
+            self.status_msg = "● Recording... press S again to send."
+            self.stt.start()
+        else:
+            self._stt_recording = False
+            self.status_msg = "Transcribing..."
+
+            def transcribe() -> None:
+                text = self.stt.stop_and_transcribe()
+                if text:
+                    self.skills.dialogue.append(("you", f"[voice] {text}"))
+                    self._run_agent_async(text)
+                else:
+                    self.status_msg = "Voice input: nothing heard."
+            threading.Thread(target=transcribe, daemon=True).start()
 
     def _toggle_webcam(self) -> None:
         if isinstance(self.emotion, DeepFaceEmotionDetector):
@@ -585,15 +619,15 @@ class App:
                 )
                 if n_fail:
                     self.skills.dialogue.append(
-                        ("system", f"{n_fail} tool step(s) failed — open Actions panel (a)."))
-                self.sidebar_panel = "trace"
+                        ("system", f"{n_fail} step(s) failed — press 'a' for details."))
+                self.sidebar_panel = "dialogue"
                 self._prepare_path_animation()
                 self._record_turn(message, world_before, res)
             except Exception as e:
                 self.last_tool_trace = []
-                self.skills.dialogue.append(("system", f"[agent error] {e}"))
+                self.skills.dialogue.append(("system", f"[error] {e}"))
                 self.status_msg = f"Agent error: {e}"
-                self.sidebar_panel = "trace"
+                self.sidebar_panel = "dialogue"
             finally:
                 self.agent_busy = False
 
@@ -675,19 +709,23 @@ class App:
         for (x, y) in self.apt.doors():
             rect = pygame.Rect(x * T + T // 4, y * T + offset_y + T // 4, T // 2, T // 2)
             pygame.draw.rect(self.screen, config.PALETTE.door, rect, border_radius=4)
-        for r in self.apt.rooms:
-            label = self.font_sm.render(r.name, True, config.PALETTE.text_dim)
-            self.screen.blit(label, (r.x0 * T + 6, r.y0 * T + offset_y + 4))
-        for (x, y), state in self.skills.robot_ctrl.map.cells.items():
-            if state == 0:  # FREE
-                rect = pygame.Rect(x * T + 2, y * T + offset_y + 2, T - 4, T - 4)
-                pygame.draw.rect(self.screen, (40, 70, 50), rect, border_radius=2)
         for d in self.iot.list():
             self._draw_device(d, offset_y)
         if self.skills.pending_path:
             for (x, y) in self.skills.pending_path:
                 rect = pygame.Rect(x * T + T // 3, y * T + offset_y + T // 3, T // 3, T // 3)
                 pygame.draw.rect(self.screen, (110, 190, 250), rect, border_radius=2)
+        # Room labels drawn last so nothing covers them.
+        for r in self.apt.rooms:
+            cx, cy = r.center
+            lbl_text = r.name.replace("_", " ").upper()
+            surf = self.font_md.render(lbl_text, True, (200, 200, 210))
+            px = cx * T + T // 2 - surf.get_width() // 2
+            py = cy * T + offset_y + T // 2 - surf.get_height() // 2
+            bg = pygame.Surface((surf.get_width() + 8, surf.get_height() + 4), pygame.SRCALPHA)
+            bg.fill((20, 20, 26, 160))
+            self.screen.blit(bg, (px - 4, py - 2))
+            self.screen.blit(surf, (px, py))
         rx, ry = self.robot.pos
         pygame.draw.circle(self.screen, config.PALETTE.robot,
                            (rx * T + T // 2, ry * T + offset_y + T // 2), T // 2 - 4)
@@ -742,7 +780,7 @@ class App:
             if not open_ and progress > 0:
                 self._draw_progress_bar(tile_x + 4, tile_y + T - 10, T - 8, 5,
                                         progress, (160, 170, 220))
-            tag = "C-O" if open_ else "C-X"
+            tag = "OPEN" if open_ else "SHUT"
         elif dev.kind == "lamp":
             on = dev.state.get("on")
             color = (255, 230, 130) if on else (110, 100, 80)
@@ -751,7 +789,7 @@ class App:
                 bright = float(dev.state.get("brightness", 0.8))
                 self._draw_progress_bar(tile_x + 4, tile_y + T - 10, T - 8, 5,
                                         bright, (255, 220, 120))
-            tag = "L+" if on else "L-"
+            tag = "LAMP" if on else "lamp"
         elif dev.kind == "toaster":
             running = dev.state.get("running")
             color = (220, 110, 80) if running else (150, 150, 160)
@@ -760,7 +798,7 @@ class App:
             if running or progress > 0:
                 self._draw_progress_bar(tile_x + 4, tile_y + T - 10, T - 8, 5,
                                         progress, (240, 140, 90))
-            tag = f"T{int(progress * 100)}%"
+            tag = f"{int(progress * 100)}%" if running else "toast"
         elif dev.kind == "coffee_maker":
             brewing = dev.state.get("brewing")
             color = (140, 90, 60) if brewing else (90, 70, 55)
@@ -769,7 +807,8 @@ class App:
             if brewing or progress > 0:
                 self._draw_progress_bar(tile_x + 4, tile_y + T - 10, T - 8, 5,
                                         progress, (180, 120, 70))
-            tag = f"K{dev.state.get('cups', 0)}"
+            cups = dev.state.get('cups', 0)
+            tag = f"brew {int(progress*100)}%" if brewing else f"cof:{cups}"
         elif dev.kind == "thermostat":
             mode = dev.state.get("mode", "off")
             color = (200, 100, 80) if mode == "heat" else (
@@ -786,7 +825,8 @@ class App:
                 vol = float(dev.state.get("volume", 0.5))
                 self._draw_progress_bar(tile_x + 4, tile_y + T - 10, T - 8, 5,
                                         vol, (120, 190, 230))
-            tag = dev.state.get("channel", "")[:3].upper() if on else "TV-"
+            ch = dev.state.get("channel", "")
+            tag = f"TV:{ch[:3].upper()}" if on and ch else ("TV ON" if on else "TV")
         elif dev.kind == "speaker":
             playing = dev.state.get("playing")
             color = (180, 140, 220) if playing else (80, 70, 90)
@@ -796,7 +836,8 @@ class App:
                 vol = float(dev.state.get("volume", 0.5))
                 self._draw_progress_bar(tile_x + 4, tile_y + T - 10, T - 8, 5,
                                         vol, (200, 160, 240))
-            tag = dev.state.get("playlist", "")[:3].upper() if playing else "SP-"
+            pl = dev.state.get("playlist", "")
+            tag = f"spk:{pl[:4]}" if playing and pl else ("spk ON" if playing else "spk")
         elif dev.kind == "fan":
             on = dev.state.get("on")
             color = (130, 200, 220) if on else (90, 100, 110)
@@ -805,15 +846,15 @@ class App:
                 spd = float(dev.state.get("speed", 1)) / 3.0
                 self._draw_progress_bar(tile_x + 4, tile_y + T - 10, T - 8, 5,
                                         spd, (100, 210, 230))
-            tag = f"F{dev.state.get('speed', 0)}" if on else "F-"
+            tag = f"fan:{dev.state.get('speed', 0)}" if on else "fan"
         elif dev.kind == "door_lock":
             locked = dev.state.get("locked")
             color = (220, 180, 80) if not locked else (140, 110, 60)
             pygame.draw.rect(self.screen, color,
                              (tile_x + 6, tile_y + 6, T - 12, T - 12), border_radius=6)
-            tag = "LOCK" if locked else "OPEN"
+            tag = "LOCK" if locked else "UNLK"
         else:
-            tag = dev.kind[:2]
+            tag = dev.kind[:4]
         lbl = self.font_sm.render(tag, True, config.PALETTE.text)
         self.screen.blit(lbl, (tile_x + 2, tile_y + T - 14))
 
@@ -821,24 +862,38 @@ class App:
         pygame.draw.rect(self.screen, (32, 32, 38),
                          (0, 0, config.WINDOW_W, config.INFOBAR_PX))
         reading = self.emotion.poll()
-        em = f"emotion: {reading.label} ({reading.confidence:.2f})" if reading else "emotion: --"
-        robot_r = self.skills.robot_room()
-        owner_r = self.skills.owner_room()
+        robot_r = (self.skills.robot_room() or "?").replace("_", " ")
+        owner_r = (self.skills.owner_room() or "?").replace("_", " ")
         agent_tag = "MockLLM" if isinstance(self.agent, MockLLM) else "Claude"
         busy = "  [thinking...]" if self.agent_busy else ""
-        replay = "  [REPLAY]" if self.replay_mode else ""
-        tel = self.skills.robot_ctrl.telemetry()
-        mode = tel.get("mode", "idle")
-        motion = tel.get("motion", {})
-        tiles = motion.get("total_tiles_traveled", 0)
-        replans = self._replan_count()
-        line = (f"{agent_tag}{replay}  |  robot: {robot_r} ({mode}, {tiles}t, R{replans})  "
-                f"owner: {owner_r}  |  {em}")
+
+        # Line 1: robot location + owner location + emotion
+        em_text = f"{reading.label} ({reading.confidence:.0%})" if reading else "--"
+        em_color = {
+            "happy": (255, 220, 80), "sad": (100, 160, 255),
+            "angry": (255, 90, 90), "tired": (180, 140, 255),
+            "surprised": (100, 255, 200), "neutral": config.PALETTE.text_dim,
+        }.get(reading.label if reading else "", config.PALETTE.text_dim)
+
+        parts = [
+            (f"Robot: {robot_r}", config.PALETTE.accent),
+            ("  |  ", config.PALETTE.text_dim),
+            (f"Owner: {owner_r}", config.PALETTE.good),
+            ("  |  Emotion: ", config.PALETTE.text_dim),
+            (em_text, em_color),
+            (f"  |  {agent_tag}", config.PALETTE.text_dim),
+        ]
+        x = 10
+        for text, color in parts:
+            surf = self.font_md.render(text, True, color)
+            self.screen.blit(surf, (x, 6))
+            x += surf.get_width()
+
+        # Line 2: status / animation info
         status = self._status_line_for_topbar(busy=busy)
-        self.screen.blit(self.font_md.render(line, True, config.PALETTE.text), (10, 6))
         if status:
-            self.screen.blit(self.font_sm.render(status[:160], True, config.PALETTE.text_dim),
-                             (10, 28))
+            self.screen.blit(self.font_sm.render(status[:180], True, config.PALETTE.text_dim),
+                             (10, 30))
 
     def _sidebar_rect(self) -> tuple[int, int, int, int]:
         x0 = config.GRID_COLS * config.TILE_PX
@@ -850,7 +905,7 @@ class App:
         pygame.draw.rect(self.screen, (30, 30, 36), (x0, y0, w, h))
         self._draw_sidebar_tabs(x0, y0, w)
         content_top = y0 + 36
-        content_bottom = config.WINDOW_H - 52
+        content_bottom = config.WINDOW_H - 48
         if self.sidebar_panel == "dialogue":
             self._draw_dialogue_panel(x0, content_top, w, content_bottom)
         elif self.sidebar_panel == "trace":
@@ -861,58 +916,95 @@ class App:
             self._draw_devices_panel(x0, content_top, w, content_bottom)
         else:
             self._draw_replay_panel(x0, content_top, w, content_bottom)
-        keys = [
-            "Tab/d/a/m/i/v: panels  |  p/[/]: replay  |  Enter: ask",
-            "F5/F9: snapshot  |  c: clear mem  |  r: reset  |  Esc: quit",
-        ]
-        for i, k in enumerate(keys):
-            self.screen.blit(self.font_sm.render(k, True, config.PALETTE.text_dim),
-                             (x0 + 12, config.WINDOW_H - 40 + i * 16))
+        self._draw_sidebar_footer(x0, w)
+
+    def _draw_sidebar_footer(self, x0: int, w: int) -> None:
+        y = config.WINDOW_H - 44
+        pygame.draw.line(self.screen, (50, 52, 60), (x0, y), (x0 + w, y))
+        y += 4
+        if self._stt_recording:
+            rec_surf = self.font_sm.render("● RECORDING  (press S to send)", True, (240, 80, 80))
+            self.screen.blit(rec_surf, (x0 + 12, y))
+        else:
+            stt_hint = "S: voice input" if self.stt.available else ""
+            line = f"Enter: type  |  {stt_hint}  |  Esc: quit"
+            self.screen.blit(self.font_sm.render(line, True, config.PALETTE.text_dim), (x0 + 12, y))
+        y += 16
+        self.screen.blit(self.font_sm.render(
+            "r: reset  |  1-6: emotion  |  a/m/i: more panels",
+            True, config.PALETTE.text_dim), (x0 + 12, y))
 
     def _draw_sidebar_tabs(self, x0: int, y0: int, w: int) -> None:
-        labels = (
+        # Primary tabs shown visually: Chat and IoT.
+        # Act/Mem/Replay remain accessible via keyboard (a/m/v) but not shown as tabs.
+        primary = (
             ("dialogue", "Chat"),
-            ("trace", "Act"),
-            ("memory", "Mem"),
-            ("devices", "IoT"),
-            ("replay", "Replay"),
+            ("devices",  "IoT Status"),
         )
+        # If user navigated to a secondary panel, show it highlighted too.
+        secondary_active = self.sidebar_panel not in ("dialogue", "devices")
+        if secondary_active:
+            labels = primary + ((self.sidebar_panel, self.sidebar_panel.capitalize()),)
+        else:
+            labels = primary
+
         tab_w = w // len(labels)
         for i, (key, label) in enumerate(labels):
             active = self.sidebar_panel == key
-            bg = (50, 55, 68) if active else (38, 40, 48)
+            bg = (55, 60, 75) if active else (38, 40, 48)
             rect = pygame.Rect(x0 + i * tab_w, y0, tab_w, 32)
             pygame.draw.rect(self.screen, bg, rect)
             if active:
                 pygame.draw.line(self.screen, config.PALETTE.accent,
-                                 (rect.left, rect.bottom - 2), (rect.right, rect.bottom - 2), 2)
+                                 (rect.left, rect.bottom - 2), (rect.right, rect.bottom - 2), 3)
             color = config.PALETTE.text if active else config.PALETTE.text_dim
             surf = self.font_sm.render(label, True, color)
             self.screen.blit(surf, surf.get_rect(center=rect.center))
 
     def _draw_dialogue_panel(self, x0: int, y0: int, w: int, y_max: int) -> None:
         entries = self.skills.dialogue
-        page_size = 12
+        if not entries:
+            hint = "Press Enter to type a request, or S to speak."
+            self.screen.blit(self.font_sm.render(hint, True, config.PALETTE.text_dim),
+                             (x0 + 12, y0 + 12))
+            return
+
+        page_size = 9
         max_scroll = max(0, len(entries) - page_size)
         self.dialogue_scroll = min(self.dialogue_scroll, max_scroll)
         end = len(entries) - self.dialogue_scroll
         visible = entries[max(0, end - page_size):end]
         y = y0 + 8
         for speaker, text in visible:
-            if y > y_max:
+            if y > y_max - 10:
                 break
-            color = config.PALETTE.good if speaker == "robot" else (
-                config.PALETTE.warn if speaker == "you" else config.PALETTE.bad)
-            tag = self.font_sm.render(f"{speaker}:", True, color)
-            self.screen.blit(tag, (x0 + 12, y))
-            wrapped = self._wrap(text, max_chars=40)
+            if speaker == "robot":
+                color = config.PALETTE.good
+                prefix = "Robot"
+                indent = x0 + 16
+            elif speaker == "you":
+                color = config.PALETTE.warn
+                prefix = "You"
+                indent = x0 + 16
+            else:
+                color = config.PALETTE.bad
+                prefix = "System"
+                indent = x0 + 16
+
+            # Speaker label
+            tag_surf = self.font_sm.render(f"{prefix}:", True, color)
+            self.screen.blit(tag_surf, (indent, y))
+            y += 18
+
+            # Message text (slightly indented, font_md for readability)
+            wrapped = self._wrap(text, max_chars=34)
             for line in wrapped:
-                if y > y_max:
+                if y > y_max - 10:
                     break
                 self.screen.blit(self.font_sm.render(line, True, config.PALETTE.text),
-                                 (x0 + 68, y))
+                                 (indent + 8, y))
                 y += 16
-            y += 6
+            y += 8
 
     def _draw_trace_panel(self, x0: int, y0: int, w: int, y_max: int) -> None:
         y = y0 + 4

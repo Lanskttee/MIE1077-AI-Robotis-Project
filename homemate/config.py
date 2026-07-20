@@ -69,6 +69,8 @@ USE_MOCK_LLM     = env_flag("HOMEMATE_USE_MOCK_LLM",     False)
 USE_MOCK_EMOTION = env_flag("HOMEMATE_USE_MOCK_EMOTION", False)
 LLM_MODEL        = os.environ.get("HOMEMATE_MODEL", "claude-sonnet-4-6")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+OPENAI_API_KEY   = os.environ.get("OPENAI_API_KEY", "")
+TTS_VOICE        = os.environ.get("HOMEMATE_TTS_VOICE", "nova")
 
 
 # ----- Emotion vocabulary -----------------------------------------------------

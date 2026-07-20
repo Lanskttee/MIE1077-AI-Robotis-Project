@@ -11,7 +11,7 @@ animated tile-by-tile in the Pygame UI.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from ..perception.emotion import EmotionDetector
 from ..robot.controller import RobotController
@@ -28,12 +28,14 @@ class Skills:
         owner: Owner,
         iot: IoTNetwork,
         emotion: EmotionDetector,
+        tts: Callable[[str], None] | None = None,
     ) -> None:
         self.apt = apt
         self.robot = robot
         self.owner = owner
         self.iot = iot
         self.emotion = emotion
+        self._tts = tts
         self.robot_ctrl = RobotController(apt, robot, owner, iot)
         self.pending_path: list[tuple[int, int]] = []
         self.dialogue: list[tuple[str, str]] = []
@@ -122,6 +124,8 @@ class Skills:
         if not text:
             return {"ok": False, "error": "empty speech"}
         self.dialogue.append(("robot", text))
+        if self._tts is not None:
+            self._tts(text)
         return {"ok": True, "spoken": text}
 
     # ---------------------------------------------------------------- IoT

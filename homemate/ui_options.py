@@ -29,6 +29,7 @@ class MainOptions:
     replay_session: str | None = None
     session_title: str | None = None
     replan_demo: bool = False
+    fullscreen: bool = False
 
 
 def parse_main_args(argv: list[str] | None = None) -> MainOptions:
@@ -69,6 +70,10 @@ def parse_main_args(argv: list[str] | None = None) -> MainOptions:
     p.add_argument(
         "--offline", action="store_true",
         help="Shorthand for --mock-llm --mock-emotion --freeze-owner.",
+    )
+    p.add_argument(
+        "--fullscreen", action="store_true",
+        help="Start in fullscreen mode (press Alt+Enter or Esc to exit).",
     )
     p.add_argument(
         "--script",
@@ -158,6 +163,7 @@ def parse_main_args(argv: list[str] | None = None) -> MainOptions:
         record_session=not args.no_record,
         replay_session=args.replay_session,
         session_title=args.session_title,
+        fullscreen=args.fullscreen,
     )
     if args.script:
         from .demo_scripts import apply_script
