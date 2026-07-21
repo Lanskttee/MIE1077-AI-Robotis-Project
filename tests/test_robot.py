@@ -110,3 +110,33 @@ def test_nearest_dock_prefers_reachable_tile() -> None:
     dock = nearest_dock(apt, robot.pos, tile)
     assert dock is not None
     assert apt.is_walkable(*dock)
+
+
+def test_deliver_keeps_inventory_if_owner_unreachable() -> None:
+    skills = _setup(owner_room="bedroom")
+    skills.inventory = ["coffee"]
+    # Force find_owner to fail by clearing apartment rooms from belief path —
+    # simplest: put owner in an invalid state via monkeying room check.
+    skills.owner.x, skills.owner.y = -10, -10  # off-map → never visible / no path
+    out = dispatch_tool(skills, "deliver_item", {})
+    assert out["ok"] is False
+    assert skills.inventory == ["coffee"]
+
+
+def test_pickup_and_deliver_coffee() -> None:
+    skills = _setup(owner_room="bedroom")
+    skills.emotion.inject("tired")
+    dispatch_tool(skills, "navigate_to_device", {"device_id": "coffee.kitchen"})
+    dispatch_tool(skills, "set_device", {"device_id": "coffee.kitchen", "action": "brew"})
+    coffee = skills.iot.get("coffee.kitchen")
+    assert coffee is not None
+    # Skip brew animation: mark ready cups for pickup.
+    coffee.state["brewing"] = False
+    coffee.state["cups"] = 1
+    coffee.state["progress"] = 1.0
+    pick = dispatch_tool(skills, "pickup_item", {"device_id": "coffee.kitchen"})
+    assert pick["ok"] is True
+    assert "coffee" in skills.inventory or pick.get("picked_up")
+    deliver = dispatch_tool(skills, "deliver_item", {})
+    assert deliver["ok"] is True
+    assert skills.inventory == []

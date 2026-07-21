@@ -205,7 +205,7 @@ python -m homemate.main --replan-demo
 
 **涉及文件**：`homemate/robot/occupancy.py`、`homemate/robot/route_optimizer.py`、`tests/test_occupancy.py`、`tests/test_route_optimizer.py`
 
-**新增 3 个 Agent 工具**（合计 14 个）：
+**新增 3 个 Agent 工具**（当时合计约 14 个；队友后续又加了 pickup/deliver/clean，现共 **17** 个）：
 - `plan_device_route` — 规划多设备最优访问顺序（不移动）
 - `visit_devices` — 沿优化路线依次导航到各 dock
 - `explore_frontier` — 主动探索 unknown frontier（辅助找主人）
@@ -226,6 +226,40 @@ dispatch_tool(skills, 'plan_device_route', {'device_ids': ['coffee.kitchen','lam
 - **99 tests passed**
 - **eval 20/20**（109/109 criteria）
 - **demo_runner 4/4**
+
+---
+
+## 队友新增（2026-07）：GPT 后端 + 语音 + 取送物 + 清扫
+
+队友在 `main` 上追加了以下能力（已 `git pull` 合并）：
+
+| 能力 | 文件 / 入口 |
+|------|-------------|
+| **GPT-4o-mini LLM** | `homemate/cognition/openai_agent.py`；有 `OPENAI_API_KEY` 且无 Anthropic key 时自动选用 |
+| **TTS / STT** | `homemate/tts.py`、`homemate/stt.py`；说话走 TTS；按 `S` 语音输入（需 Whisper + mic） |
+| **取送物** | 工具 `pickup_item` / `deliver_item`；煮完咖啡/吐司后回到主人身边交付 |
+| **清扫房间** | 工具 `clean_room`（复用覆盖扫掠） |
+| **音乐播放** | speaker 播放时 Pygame 合成循环音效 |
+| **UI** | 地图更干净、平滑缩放、聊天滚动修复 |
+
+**环境变量**（写在本地 `.env`，勿提交）：
+```
+OPENAI_API_KEY=sk-...
+HOMEMATE_OPENAI_MODEL=gpt-4o-mini
+HOMEMATE_USE_MOCK_EMOTION=1
+```
+
+**测试 GPT 路径**（不要加 `--offline` / `--mock-llm`）：
+```powershell
+python -m homemate.main --mock-emotion --owner-room bedroom --emotion tired
+# 按 F2 或 Enter 发请求；机器人说话会走 TTS
+```
+
+**当前工具共 17 个**：含 `pickup_item`、`deliver_item`、`clean_room`。
+
+### 验证结果（合并队友代码后）
+- **99 tests passed**
+- **eval 20/20**、**demo_runner 4/4**（MockLLM）
 
 ---
 
@@ -291,5 +325,8 @@ tests/test_demo_runner.py
 tests/test_robot.py
 homemate/main.py   (大幅增强)
 homemate/action/skills.py  (接入 RobotController)
-homemate/cognition/tools.py  (14 工具：scan_room, get_robot_state, plan_device_route, visit_devices, explore_frontier, ...)
+homemate/cognition/tools.py  (17 工具：pickup_item, deliver_item, clean_room, scan_room, ...)
+homemate/cognition/openai_agent.py
+homemate/tts.py
+homemate/stt.py
 ```

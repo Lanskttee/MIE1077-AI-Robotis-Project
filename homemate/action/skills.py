@@ -180,8 +180,14 @@ class Skills:
         out = self.robot_ctrl.find_owner_plan(
             self.pending_path, owner_check=self._owner_in_current_room,
         )
-        if out.get("ok"):
-            self.owner_found = True
+        if not out.get("ok"):
+            return {
+                "ok": False,
+                "error": "could not reach owner to deliver",
+                "inventory": list(self.inventory),
+                "find_owner": out,
+            }
+        self.owner_found = True
         delivered = list(self.inventory)
         self.inventory.clear()
         return {"ok": True, "delivered": delivered,

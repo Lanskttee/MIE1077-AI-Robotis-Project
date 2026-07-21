@@ -1,12 +1,14 @@
 """Text-to-speech engine.
 
-Uses macOS ``say`` by default (free, zero deps).
-If OPENAI_API_KEY is set, uses OpenAI tts-1 (nova voice) instead.
+Prefers OpenAI ``tts-1`` when ``OPENAI_API_KEY`` is set; otherwise falls back to
+platform speech (macOS ``say``, Windows SAPI via ``powershell``, or silent).
+Playback uses pygame when available so Windows works without ``afplay``.
 All calls are fire-and-forget daemon threads so they never block the UI.
 """
 from __future__ import annotations
 
 import os
+import platform
 import subprocess
 import tempfile
 import threading
@@ -37,12 +39,30 @@ class TTSEngine:
                 self._say_openai(text)
                 return
             except Exception as e:
-                print(f"[TTS] OpenAI failed ({e}), falling back to say")
-        self._say_macos(text)
+                print(f"[TTS] OpenAI failed ({e}), falling back to system TTS")
+        self._say_system(text)
 
     @staticmethod
-    def _say_macos(text: str) -> None:
-        subprocess.run(["say", "-r", "160", text], check=False)
+    def _say_system(text: str) -> None:
+        system = platform.system()
+        if system == "Darwin":
+            subprocess.run(["say", "-r", "160", text], check=False)
+            return
+        if system == "Windows":
+            # Escape single quotes for PowerShell single-quoted string.
+            safe = text.replace("'", "''")
+            subprocess.run(
+                [
+                    "powershell", "-NoProfile", "-Command",
+                    f"Add-Type -AssemblyName System.Speech; "
+                    f"(New-Object System.Speech.Synthesis.SpeechSynthesizer)"
+                    f".Speak('{safe}')",
+                ],
+                check=False,
+            )
+            return
+        # Linux / other: best-effort espeak if present.
+        subprocess.run(["espeak", text], check=False)
 
     def _say_openai(self, text: str) -> None:
         from openai import OpenAI  # lazy import
@@ -56,9 +76,32 @@ class TTSEngine:
             f.write(response.content)
             fname = f.name
         try:
-            subprocess.run(["afplay", fname], check=False)
+            if not self._play_file(fname):
+                raise RuntimeError("no audio playback backend available")
         finally:
             try:
                 os.unlink(fname)
             except OSError:
                 pass
+
+    @staticmethod
+    def _play_file(path: str) -> bool:
+        """Play an audio file; return True if something actually played."""
+        system = platform.system()
+        if system == "Darwin":
+            return subprocess.run(["afplay", path], check=False).returncode == 0
+        # Cross-platform: pygame mixer (already a project dependency).
+        try:
+            import pygame
+            if not pygame.mixer.get_init():
+                pygame.mixer.init()
+            sound = pygame.mixer.Sound(path)
+            channel = sound.play()
+            if channel is None:
+                return False
+            while channel.get_busy():
+                pygame.time.wait(50)
+            return True
+        except Exception as e:
+            print(f"[TTS] pygame playback failed: {e}")
+            return False

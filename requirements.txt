@@ -4,7 +4,12 @@ numpy>=1.24.0
 
 # LLM
 anthropic>=0.39.0
+openai>=1.40.0
 python-dotenv>=1.0.0
+
+# Voice (optional — STT needs mic packages; TTS works with openai + pygame)
+sounddevice>=0.4.6
+soundfile>=0.12.1
 
 # Vision
 opencv-python>=4.8.0
