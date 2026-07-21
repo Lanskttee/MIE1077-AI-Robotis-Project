@@ -469,7 +469,25 @@ class App:
                 self._sync_animation_status()
         if not self.opts.freeze_owner:
             self._tick_owner()
+        self._tick_follow_owner()
         self.iot.tick(dt)
+
+    def _tick_follow_owner(self) -> None:
+        """Keep chasing a wandering owner while idle (follow mode, no pending path).
+
+        The per-tile replan in ``_tick`` / ``_tick_owner`` only fires while the
+        robot is already moving. Once ``find_owner`` parks the robot next to the
+        owner, ``pending_path`` is empty, so a wandering owner would be lost
+        without this idle trigger.
+        """
+        if self.agent_busy or self.replay_mode or self.skills.pending_path:
+            return
+        if not self.skills.robot_ctrl.tracker.follow_owner:
+            return
+        res = self.skills.robot_ctrl.follow_owner_step(self.skills.pending_path)
+        if res and res.get("replanned"):
+            self.skills.owner_found = self.skills.robot_ctrl.owner_visible()
+            self._sync_animation_status(replan_res=res)
 
     def _tick_auto_run(self) -> None:
         if not self._auto_run_message or self.agent_busy:

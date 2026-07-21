@@ -123,6 +123,50 @@ def test_deliver_keeps_inventory_if_owner_unreachable() -> None:
     assert skills.inventory == ["coffee"]
 
 
+def test_follow_owner_step_chases_moving_owner() -> None:
+    apt = Apartment()
+    robot = Robot(0, 0)
+    owner = Owner(0, 0)
+    place_in_room(robot, apt, "living_room", None)
+    place_in_room(owner, apt, "living_room", None)
+    ctrl = RobotController(apt, robot, owner, IoTNetwork.default())
+    pending: list[tuple[int, int]] = []
+
+    # Not following yet -> no-op.
+    assert ctrl.follow_owner_step(pending) is None
+
+    # Enable follow (as find_owner would) and move the owner far away.
+    ctrl.tracker.enable_owner_tracking(owner_pos=owner.pos)
+    place_in_room(owner, apt, "bedroom", None)
+    res = ctrl.follow_owner_step(pending)
+    assert res is not None and res["ok"] and res["replanned"]
+    assert len(pending) > 0
+    assert ctrl.metrics.replan_count > 0
+
+    # Walk the queued path; robot should end within interaction range.
+    for tile in list(pending):
+        robot.x, robot.y = tile
+    pending.clear()
+    assert can_interact(robot.pos, owner.pos)
+    # Already adjacent -> no further movement queued.
+    assert ctrl.follow_owner_step(pending) is None
+    assert pending == []
+
+
+def test_follow_owner_step_never_targets_owner_tile() -> None:
+    apt = Apartment()
+    robot = Robot(0, 0)
+    owner = Owner(0, 0)
+    place_in_room(robot, apt, "living_room", None)
+    place_in_room(owner, apt, "kitchen", None)
+    ctrl = RobotController(apt, robot, owner, IoTNetwork.default())
+    ctrl.tracker.enable_owner_tracking(owner_pos=owner.pos)
+    pending: list[tuple[int, int]] = []
+    res = ctrl.follow_owner_step(pending)
+    assert res is not None and res["ok"]
+    assert owner.pos not in pending
+
+
 def test_pickup_and_deliver_coffee() -> None:
     skills = _setup(owner_room="bedroom")
     skills.emotion.inject("tired")

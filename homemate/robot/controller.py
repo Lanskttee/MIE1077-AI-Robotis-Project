@@ -150,12 +150,20 @@ class RobotController:
         if self.tracker.active is None:
             return {"ok": False, "error": "no active goal"}
         goal = self.tracker.active.goal
-        if self.tracker.follow_owner and reason == "owner_moved":
-            # Keep device / room goals fixed; only chase the owner tile when that
-            # *is* the navigation target (find_owner follow mode).
-            if self.tracker.active.kind == "owner":
-                goal = self.owner.pos
-                self.tracker.register(goal, kind="owner", label="follow_owner")
+        if self.tracker.follow_owner and self.tracker.active.kind == "owner":
+            # Follow mode: stand next to the owner, never on the owner's tile
+            # (that tile is a dynamic obstacle in the costmap).
+            if can_interact(self.robot.pos, self.owner.pos):
+                self.tracker.last_owner_pos = self.owner.pos
+                return {"ok": True, "replanned": False, "reason": "already_adjacent"}
+            dock = nearest_dock(
+                self.apt, self.robot.pos, self.owner.pos, owner_pos=self.owner.pos,
+            )
+            if dock is None:
+                return {"ok": False, "error": "no dock reachable near owner",
+                        "reason": reason}
+            goal = dock
+            self.tracker.register(goal, kind="owner", label="follow_owner")
         plan = self.plan_to(goal)
         if not plan.path:
             return {"ok": False, "error": "replan failed", "reason": reason}
@@ -176,6 +184,48 @@ class RobotController:
             "turn_count": plan.turn_count,
             "planner": plan.planner,
             "goal": list(goal),
+        }
+
+    def follow_owner_step(self, pending: list[Coord]) -> dict[str, Any] | None:
+        """Idle-follow: move next to the owner unless already within reach.
+
+        Used by the UI loop when the robot is standing still but still in
+        follow mode (e.g. after ``find_owner``). Unlike :meth:`try_replan`,
+        this does not depend on the owner having moved *this* frame, so the
+        robot will also close the gap after finishing an unrelated task.
+        """
+        if not self.tracker.follow_owner:
+            return None
+        self.tracker.last_owner_pos = self.owner.pos
+        if can_interact(self.robot.pos, self.owner.pos):
+            return None
+        dock = nearest_dock(
+            self.apt, self.robot.pos, self.owner.pos, owner_pos=self.owner.pos,
+        )
+        if dock is None:
+            return {"ok": False, "error": "no dock reachable near owner"}
+        plan = self.plan_to(dock)
+        if not plan.path:
+            return {"ok": False, "error": "follow replan failed"}
+        # Leave the robot where it is; the UI loop animates ``pending`` forward
+        # one tile per frame (no teleport-then-rewind here, unlike the agent path).
+        pending.clear()
+        pending.extend(plan.path[1:])
+        self.tracker.register(dock, kind="owner", label="follow_owner")
+        self.metrics.record_replan()
+        self.tracker.record_replan(
+            "follow_owner", new_cost=plan.total_cost,
+            turns=plan.turn_count, planner=plan.planner,
+        )
+        self.mode = "following"
+        return {
+            "ok": True,
+            "replanned": True,
+            "reason": "follow_owner",
+            "tile_steps": plan.tile_steps,
+            "turn_count": plan.turn_count,
+            "planner": plan.planner,
+            "goal": list(dock),
         }
 
     # --- search ---
