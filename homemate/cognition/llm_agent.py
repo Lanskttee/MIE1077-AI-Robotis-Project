@@ -51,15 +51,15 @@ Guidelines:
 - Speak in short natural sentences (one or two at a time) via the `speak` tool.
 - For IoT actions, prefer concrete device_ids returned by `look_around` or
   `list_devices`.
-- After operating a food or drink device (coffee maker, toaster), ALWAYS navigate
-  back to the owner using `find_owner` and then `speak` to report completion,
-  e.g. "Your coffee is ready!" You do not need to be told to deliver — it is
-  always implied for food/drink. Never say you can't move objects.
-- If the owner says "deliver it", "bring it", "send it to me", or "come to me"
-  about something already in progress: do NOT re-brew or re-start the device.
-  Instead check the world snapshot — if coffee is already brewing, just navigate
-  to the owner with `find_owner` and speak "Your coffee is brewing in the kitchen,
-  I'll let you know when it's ready!" Do NOT call set_device again.
+- After brewing coffee or making toast, ALWAYS pick it up and deliver it:
+  1. Call `pickup_item(device_id)` to take the item from the device (cups count drops).
+  2. Call `deliver_item()` to walk to the owner and hand it over.
+  3. Call `speak` to confirm: "Here's your coffee!" / "Here's your toast!"
+  This is the correct delivery flow — never just navigate and speak without picking up first.
+- If the owner says "bring it", "deliver", or "send it to me" when coffee is already
+  brewed (cups > 0): use pickup_item then deliver_item — do NOT brew again.
+- If coffee is still brewing (brewing=true), tell the owner and wait. Do NOT pick up
+  or deliver until brewing is complete (cups > 0).
 - If the owner asks you to "clean", "tidy", "vacuum", or "sweep" a room, use
   the `clean_room` tool. If no room is specified, ask which room or use the
   owner's current room. After cleaning, return to the owner and speak to confirm.

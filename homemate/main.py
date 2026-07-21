@@ -233,6 +233,7 @@ class App:
             owner_room = random_room(self.apt, "living_room", self.rng)
         place_in_room(self.owner, self.apt, owner_room, self.rng)
         self.skills.pending_path.clear()
+        self.skills.inventory.clear()
         if not initial:
             self.skills.dialogue.clear()
             self.dialogue_scroll = 0
@@ -797,6 +798,11 @@ class App:
                            (rx * T + T // 2, ry * T + offset_y + T // 2), 3)
         rob_lbl = self.font_sm.render("ROBOT", True, config.PALETTE.accent)
         self.screen.blit(rob_lbl, (rx * T + 2, ry * T + offset_y - 14))
+        # Inventory badge — show what the robot is carrying.
+        if self.skills.inventory:
+            badge_text = " ".join(self.skills.inventory)
+            badge = self.font_sm.render(f"[{badge_text}]", True, (255, 220, 80))
+            self.screen.blit(badge, (rx * T + 2, ry * T + offset_y + T))
         ox, oy = self.owner.pos
         pygame.draw.rect(self.screen, config.PALETTE.owner,
                          (ox * T + 5, oy * T + offset_y + 5, T - 10, T - 10), border_radius=4)
@@ -872,7 +878,15 @@ class App:
                 self._draw_progress_bar(tile_x + 4, tile_y + T - 10, T - 8, 5,
                                         progress, (180, 120, 70))
             cups = dev.state.get('cups', 0)
-            tag = f"brew {int(progress*100)}%" if brewing else f"cof:{cups}"
+            if brewing:
+                tag = f"{int(progress*100)}%"
+            elif cups > 0:
+                tag = f"READY x{cups}"
+                # Highlight the device when coffee is waiting to be picked up.
+                pygame.draw.rect(self.screen, (220, 160, 60),
+                                 (tile_x + 2, tile_y + 2, T - 4, T - 4), 2, border_radius=3)
+            else:
+                tag = "cof"
         elif dev.kind == "thermostat":
             mode = dev.state.get("mode", "off")
             color = (200, 100, 80) if mode == "heat" else (

@@ -40,6 +40,7 @@ class Skills:
         self.pending_path: list[tuple[int, int]] = []
         self.dialogue: list[tuple[str, str]] = []
         self.owner_found = False
+        self.inventory: list[str] = []  # items the robot is currently carrying
 
     # ---------------------------------------------------------------- navigation
 
@@ -156,6 +157,35 @@ class Skills:
         if result.get("ok"):
             self.robot_ctrl.mode = "actuating"
         return result
+
+    def pickup_item(self, device_id: str) -> dict[str, Any]:
+        """Pick up a ready item (coffee, toast) from a device and add to inventory."""
+        dev = self.iot.get(device_id)
+        if dev is None:
+            return {"ok": False, "error": f"unknown device {device_id}"}
+        reach = self.robot_ctrl.check_device_reach(dev)
+        if not reach.get("ok"):
+            self.robot_ctrl.navigate_to_device(dev, self.pending_path)
+        result = self.iot.act(device_id, "pick_up")
+        if result.get("ok"):
+            item = result.get("item", "item")
+            self.inventory.append(item)
+            return {"ok": True, "picked_up": item, "inventory": list(self.inventory)}
+        return result
+
+    def deliver_item(self) -> dict[str, Any]:
+        """Walk to the owner and hand over everything in the robot's inventory."""
+        if not self.inventory:
+            return {"ok": False, "error": "robot is not carrying anything"}
+        out = self.robot_ctrl.find_owner_plan(
+            self.pending_path, owner_check=self._owner_in_current_room,
+        )
+        if out.get("ok"):
+            self.owner_found = True
+        delivered = list(self.inventory)
+        self.inventory.clear()
+        return {"ok": True, "delivered": delivered,
+                "message": f"Handed {', '.join(delivered)} to the owner."}
 
     def list_devices(self) -> dict[str, Any]:
         return {"ok": True, "devices": self.iot.snapshot()}

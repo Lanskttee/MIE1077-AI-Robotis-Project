@@ -184,6 +184,26 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "pickup_item",
+        "description": "Pick up a ready item (e.g. brewed coffee, finished toast) from "
+                       "a device and add it to the robot's inventory. Only works when "
+                       "the item is ready (coffee cups > 0, toast progress = 100%).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "device_id": {"type": "string",
+                              "description": "Device to pick up from, e.g. 'coffee.kitchen'"},
+            },
+            "required": ["device_id"],
+        },
+    },
+    {
+        "name": "deliver_item",
+        "description": "Navigate to the owner and hand over everything the robot is "
+                       "carrying. Use after pickup_item to complete a delivery.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "set_device",
         "description": "Actuate an IoT device. Supported (device_id, action) pairs: "
                        "curtain.* -> open|close|toggle; "
@@ -246,6 +266,10 @@ def dispatch_tool(skills: Skills, name: str, tool_input: dict[str, Any]) -> dict
             from ..planning.react import ReActPlanner
             plan = ReActPlanner().plan(tool_input.get("user_message", ""), skills=skills)
             return {"ok": True, "plan": plan.to_json()}
+        if name == "pickup_item":
+            return skills.pickup_item(tool_input["device_id"])
+        if name == "deliver_item":
+            return skills.deliver_item()
         if name == "set_device":
             kwargs = tool_input.get("kwargs") or {}
             return skills.set_device(tool_input["device_id"], tool_input["action"], **kwargs)

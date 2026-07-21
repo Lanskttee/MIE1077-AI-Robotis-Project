@@ -261,6 +261,21 @@ class RobotController:
             "map": self.map.snapshot(),
         }
 
+    def navigate_to_owner(self, pending: list[Coord]) -> dict[str, Any]:
+        """Close the last few tiles to stand right next to the owner.
+
+        Being in the same room satisfies ``owner_check`` for emotion/speak
+        purposes, but is not close enough to hand over an item — without
+        this, the robot can report "delivered" while still standing across
+        the room from the owner.
+        """
+        if can_interact(self.robot.pos, self.owner.pos):
+            return {"ok": True, "already_close": True}
+        dock = nearest_dock(self.apt, self.robot.pos, self.owner.pos, owner_pos=self.owner.pos)
+        if dock is None:
+            return {"ok": False, "error": "no dock reachable near owner"}
+        return self.navigate_to_tile(dock, pending, kind="owner", label="owner")
+
     def find_owner_plan(self, pending: list[Coord],
                         owner_check: Callable[[], bool]) -> dict[str, Any]:
         self.mode = "searching"
@@ -269,6 +284,7 @@ class RobotController:
             room = self.owner_room()
             if room:
                 self.belief.observe(room, True)
+            self.navigate_to_owner(pending)
             self.tracker.enable_owner_tracking(owner_pos=self.owner.pos)
             self.mode = "idle"
             return {"ok": True, "owner_room": room, "method": "already_here",
@@ -282,6 +298,7 @@ class RobotController:
             visible = owner_check()
             self.belief.observe(room, visible)
             if visible:
+                self.navigate_to_owner(pending)
                 self.tracker.enable_owner_tracking(owner_pos=self.owner.pos)
                 self.mode = "idle"
                 return {"ok": True, "owner_room": room, "method": "belief_sweep",
@@ -290,6 +307,7 @@ class RobotController:
                         "planner": nav.get("planner")}
             scan = self.scan_room(room, pending, owner_check=owner_check)
             if scan.get("owner_found"):
+                self.navigate_to_owner(pending)
                 self.mode = "idle"
                 return {"ok": True, "owner_room": room, "method": "coverage_scan",
                         "tiles_scanned": scan.get("tiles_scanned", 0),
@@ -297,6 +315,7 @@ class RobotController:
 
         explore = self.explore_frontier(pending, owner_check=owner_check, max_hops=2)
         if explore.get("owner_found"):
+            self.navigate_to_owner(pending)
             self.mode = "idle"
             return {"ok": True, "owner_room": self.owner_room(), "method": "frontier_explore",
                     "belief": self.belief.snapshot(), "map": explore.get("map")}

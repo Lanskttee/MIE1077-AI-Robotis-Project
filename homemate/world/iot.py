@@ -99,7 +99,7 @@ class Toaster(IoTDevice):
         self.state.setdefault("progress", 0.0)   # 0..1 cooking progress
 
     def actions(self) -> list[str]:
-        return ["start", "stop", "set_level"]
+        return ["start", "stop", "set_level", "pick_up"]
 
     def apply(self, action: str, **kwargs: Any) -> dict[str, Any]:
         if action == "start":
@@ -111,6 +111,11 @@ class Toaster(IoTDevice):
             self.state["running"] = False
         elif action == "set_level":
             self.state["level"] = max(1, min(5, int(kwargs.get("level", 3))))
+        elif action == "pick_up":
+            if self.state.get("progress", 0.0) < 1.0 or self.state.get("running"):
+                return {"ok": False, "error": "toast not ready yet"}
+            self.state["progress"] = 0.0  # reset after pickup
+            return {"ok": True, "item": "toast"}
         else:
             return {"ok": False, "error": f"unknown action {action}"}
         return {"ok": True, "state": dict(self.state)}
@@ -136,14 +141,21 @@ class CoffeeMaker(IoTDevice):
         self.state.setdefault("progress", 0.0)
 
     def actions(self) -> list[str]:
-        return ["brew", "stop"]
+        return ["brew", "stop", "pick_up"]
 
     def apply(self, action: str, **kwargs: Any) -> dict[str, Any]:
         if action == "brew":
+            if self.state.get("brewing"):
+                return {"ok": False, "error": "already brewing"}
             self.state["brewing"] = True
             self.state["progress"] = 0.0
         elif action == "stop":
             self.state["brewing"] = False
+        elif action == "pick_up":
+            if self.state.get("cups", 0) < 1:
+                return {"ok": False, "error": "no cups ready to pick up"}
+            self.state["cups"] -= 1
+            return {"ok": True, "item": "coffee", "cups_remaining": self.state["cups"]}
         else:
             return {"ok": False, "error": f"unknown action {action}"}
         return {"ok": True, "state": dict(self.state)}

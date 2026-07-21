@@ -178,22 +178,61 @@ class ReActPlanner:
             if kind in DELIVER_AFTER_KINDS:
                 needs_delivery = True
 
-        # Navigate back to owner after food/drink tasks or explicit delivery request.
+        # Pick up and deliver food/drink items to the owner — but only items
+        # that are actually ready. A device just actuated this same turn
+        # (e.g. "brew coffee") has not had time to finish; trying to pick it
+        # up immediately would always fail since no simulated time passes
+        # between steps in a single plan.
         if needs_delivery:
-            plan.steps.append(PlanStep(
-                kind="find_owner",
-                rationale="Deliver result to owner / come to where the owner is.",
-            ))
+            device_item_map = {"coffee_maker": "coffee.kitchen", "toaster": "toaster.kitchen"}
             device_names = {"coffee_maker": "coffee", "toaster": "toast"}
-            delivered = next(
-                (device_names[k] for k in kinds_seen if k in device_names), None
-            )
-            delivery_text = f"Your {delivered} is ready!" if delivered else "Here you go!"
-            plan.steps.append(PlanStep(
-                kind="speak",
-                args={"intent": "task", "text": delivery_text},
-                rationale="Confirm delivery to owner.",
-            ))
+            ready_kinds: list[str] = []
+            pending_kinds: list[str] = []
+            for kind in kinds_seen:
+                device_id = device_item_map.get(kind)
+                if device_id is None:
+                    continue
+                dev = skills.iot.get(device_id)
+                state = dev.state if dev else {}
+                if kind == "coffee_maker":
+                    ready = state.get("cups", 0) > 0
+                elif kind == "toaster":
+                    ready = state.get("progress", 0.0) >= 1.0 and not state.get("running", False)
+                else:
+                    ready = False
+                (ready_kinds if ready else pending_kinds).append(kind)
+
+            for kind in ready_kinds:
+                plan.steps.append(PlanStep(
+                    kind="pickup_item",
+                    args={"device_id": device_item_map[kind]},
+                    rationale=f"Pick up the {kind.replace('_', ' ')} to carry it.",
+                ))
+            if ready_kinds:
+                plan.steps.append(PlanStep(
+                    kind="deliver_item",
+                    rationale="Walk to owner and hand over the item(s).",
+                ))
+                delivered = next(
+                    (device_names[k] for k in ready_kinds if k in device_names), None
+                )
+                delivery_text = f"Here's your {delivered}!" if delivered else "Here you go!"
+                plan.steps.append(PlanStep(
+                    kind="speak",
+                    args={"intent": "task", "text": delivery_text},
+                    rationale="Confirm delivery to owner.",
+                ))
+            if pending_kinds:
+                pending = next(
+                    (device_names[k] for k in pending_kinds if k in device_names), None
+                )
+                wait_text = (f"Your {pending} is on its way, I'll bring it once it's ready!"
+                             if pending else "I'll bring it to you once it's ready!")
+                plan.steps.append(PlanStep(
+                    kind="speak",
+                    args={"intent": "task", "text": wait_text},
+                    rationale="Item not ready yet — acknowledge and defer delivery.",
+                ))
 
         # 5. Cleaning actions — boustrophedon sweep of requested rooms.
         if any(kw in msg for kw in CLEAN_KEYWORDS):
@@ -366,4 +405,8 @@ class PlanExecutor:
             return "set_device", inp
         if step.kind == "clean_room":
             return "clean_room", {"room": step.args["room"]}
+        if step.kind == "pickup_item":
+            return "pickup_item", {"device_id": step.args["device_id"]}
+        if step.kind == "deliver_item":
+            return "deliver_item", {}
         raise ValueError(f"unknown plan step kind: {step.kind!r}")

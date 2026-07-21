@@ -54,12 +54,15 @@ def test_navigate_to_device_reaches_interaction_range() -> None:
     assert can_interact(skills.robot.pos, tile)
 
 
-def test_set_device_rejects_out_of_range() -> None:
+def test_set_device_auto_navigates_when_out_of_range() -> None:
     skills = _setup()
     out = dispatch_tool(skills, "set_device",
                         {"device_id": "coffee.kitchen", "action": "brew"})
-    assert out["ok"] is False
-    assert "interaction range" in out["error"]
+    assert out["ok"] is True
+    dev = skills.iot.get("coffee.kitchen")
+    assert dev is not None
+    tile = device_tile(skills.apt, dev)
+    assert can_interact(skills.robot.pos, tile)
 
 
 def test_find_owner_uses_belief_metadata() -> None:
